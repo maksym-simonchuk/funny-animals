@@ -82,12 +82,37 @@ def caption_png(text: str, out: Path, font_path: str, size: int, top: bool) -> P
 
 
 def _fit(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, max_width: int) -> str:
-    """Trim `text` with an ellipsis until it fits -- ranking rows must stay on one line."""
+    """Trim `text` until it fits -- ranking rows must stay on one line.
+
+    Whole words go first: "WATERMELON WIELDER" reads as a joke where the mid-word cut
+    "WATERMELON WIELDER, UNSTOPP..." reads as a bug. The ellipsis is the last resort, for
+    the single word that is too wide on its own.
+    """
+    words = text.split()
+    while len(words) > 1 and draw.textlength(" ".join(words), font=font) > max_width:
+        words.pop()
+    # the comma the dropped word hung off would read as a row cut short
+    text = " ".join(words).rstrip(",;:")
     if draw.textlength(text, font=font) <= max_width:
         return text
     while text and draw.textlength(f"{text}...", font=font) > max_width:
         text = text[:-1]
     return f"{text}..."
+
+
+def _row_font(
+    draw: ImageDraw.ImageDraw, rows: list[str], font_path: str, size: int, max_width: int
+) -> ImageFont.FreeTypeFont:
+    """Largest size at which every row fits on one line, down to 70% of `size`.
+
+    Shrinking the whole list keeps it looking like one list and costs no words; below 70%
+    the rows stop being readable on a phone, so the overlong one loses a word instead.
+    """
+    for candidate in range(size, int(size * 0.7), -2):
+        font = _load_font(font_path, candidate)
+        if all(draw.textlength(row, font=font) <= max_width for row in rows):
+            return font
+    return _load_font(font_path, int(size * 0.7))
 
 
 def ranking_png(names: list[str], active: int, out: Path, font_path: str, size: int) -> Path:
@@ -98,15 +123,19 @@ def ranking_png(names: list[str], active: int, out: Path, font_path: str, size: 
     """
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    font = _load_font(font_path, size)
+    # sized against every row, not just the visible ones: the list must not resize as it fills in
+    limit = int(WIDTH * 0.62)
+    labels = [f"{index + 1}. {name.upper()}" for index, name in enumerate(names)]
+    font = _row_font(draw, labels, font_path, size, limit)
 
     line_height = int(size * 1.7)
     y = (HEIGHT - line_height * len(names)) // 2
-    for index, name in enumerate(names):
+    for index, label in enumerate(labels):
         current = index == active
-        label = f"{index + 1}. {name.upper()}" if index <= active else f"{index + 1}."
+        if index > active:
+            label = f"{index + 1}."
         draw.text(
-            (_MARGIN, y), _fit(draw, label, font, int(WIDTH * 0.62)), font=font,
+            (_MARGIN, y), _fit(draw, label, font, limit), font=font,
             fill=(255, 209, 26, 255) if current else (255, 255, 255, 150),
             stroke_width=max(2, size // 10), stroke_fill=(0, 0, 0, 255 if current else 150),
         )

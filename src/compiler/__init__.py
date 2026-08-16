@@ -129,16 +129,17 @@ def _look_at_clips(picked, compiler_cfg, work_dir: Path) -> list[Clip]:
             Path(file_path), work_dir / f"look_{index}.jpg",
             start + compiler_cfg.segment_seconds / 2,
         )
-        seen = describe_frame(frame, compiler_cfg, hint=category)
+        seen = describe_frame(frame, compiler_cfg)
         logger.info(f"vision {index + 1}/{len(picked)}: {seen or '(no description)'}")
         clips.append(Clip(video_id=video_id, category=category, tags=tags, seen=seen))
     return clips
 
 
 def _render_segments(picked, clips: list[Clip], plan: Plan, compiler_cfg, work_dir: Path) -> list[Path]:
-    # the rubric is the same on every clip, so it is drawn once
+    # the rubric is the same on every clip, so it is drawn once. It says how many rows the
+    # ranking has, so a viewer landing mid-clip knows there is a countdown to stay for.
     rubric = render.caption_png(
-        plan.category, work_dir / "rubric.png",
+        f"TOP {len(picked)} {plan.category}", work_dir / "rubric.png",
         compiler_cfg.font, compiler_cfg.title_size, top=True,
     )
     fills = _fill_audio(picked, clips, work_dir, compiler_cfg)
@@ -151,11 +152,14 @@ def _render_segments(picked, clips: list[Clip], plan: Plan, compiler_cfg, work_d
                 compiler_cfg.font, compiler_cfg.ranking_size,
             ),
         ]
-        # the hook only belongs on the opening clip
+        # every clip gets its own meme caption along the bottom; the hook opens the short
+        line = plan.lines[index] if index < len(plan.lines) else ""
         if index == 0:
+            line = plan.hook or line or plan.title
+        if line:
             overlays.append(
                 render.caption_png(
-                    plan.hook or plan.title, work_dir / "hook.png",
+                    line, work_dir / f"line_{index}.png",
                     compiler_cfg.font, compiler_cfg.caption_size, top=False,
                 )
             )

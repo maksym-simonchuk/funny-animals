@@ -12,7 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from src.compiler import CompileError, _segment_start, build_short
 from src.compiler import plan as plan_mod
@@ -149,11 +149,11 @@ def test_describe_frame_sends_the_image_and_returns_one_line(tmp_cfg, tmp_path: 
 
     monkeypatch.setattr(plan_mod.urllib.request, "urlopen", fake_urlopen)
 
-    assert plan_mod.describe_frame(frame, cfg, hint="dog") == "a dog in a hat"
+    assert plan_mod.describe_frame(frame, cfg) == "a dog in a hat"
     assert sent[0]["model"] == "qwen2.5vl:7b"
     assert sent[0]["messages"][0]["images"]  # base64 of the jpeg travelled with it
-    # the YOLO class travels as a correctable hint, not as the answer
-    assert 'labelled the animal "dog"' in sent[0]["messages"][0]["content"]
+    # the species stays out of it, or the text model opens every row with it
+    assert "never name the" in sent[0]["messages"][0]["content"]
 
 
 def test_describe_frame_falls_back_quietly_when_vision_is_off_or_down(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
@@ -185,6 +185,35 @@ def test_caption_png_is_a_transparent_canvas_with_wrapped_text(tmp_cfg, tmp_path
     # text sits in the lower half and leaves the upper-left corner untouched
     assert image.getpixel((0, 0))[3] == 0
     assert image.crop((0, render.HEIGHT // 2, render.WIDTH, render.HEIGHT)).getbbox() is not None
+
+
+def test_make_plan_cuts_a_caption_the_model_ran_long(monkeypatch, tmp_cfg) -> None:
+    _stub_ollama(monkeypatch, {
+        "category": "c", "title": "t", "hook": "h",
+        "captions": ["Dachshund with a toy? That's a hotdog!", "short one"],
+    })
+    clips = [plan_mod.Clip(1, "dog", []), plan_mod.Clip(2, "dog", [])]
+
+    result = plan_mod.make_plan(clips, tmp_cfg.compiler)
+
+    # an overlong row stops being readable in the second it is on screen, and the cut
+    # must not leave it hanging on an article
+    assert result.captions == ["Dachshund with a toy", "short one"]
+
+
+def test_make_plan_keeps_the_species_out_of_the_prompt_and_caps_the_bottom_line(monkeypatch, tmp_cfg) -> None:
+    sent = _stub_ollama(monkeypatch, {
+        "category": "c", "title": "t", "hook": "h",
+        "captions": ["caught red pawed"], "lines": ["one two three four five six seven eight nine"],
+    })
+    clips = [plan_mod.Clip(1, "dog", [], seen="the animal is wearing a strawberry hat")]
+
+    result = plan_mod.make_plan(clips, tmp_cfg.compiler)
+
+    # with a description in hand the YOLO class is dropped: it is the word the model copies
+    assert "dog" not in sent[0]["messages"][1]["content"]
+    # the bottom caption wraps, so it may be a sentence -- but not one that covers the clip
+    assert result.lines == ["one two three four five six seven eight"]
 
 
 def test_pick_sound_asks_the_model_which_track_suits_the_silent_clip(monkeypatch, tmp_cfg) -> None:
@@ -235,6 +264,32 @@ def test_ranking_png_truncates_a_name_too_long_for_one_line(tmp_cfg, tmp_path: P
     )
 
     assert Image.open(out).getbbox()[2] <= int(render.WIDTH * 0.62) + render.WIDTH // 8
+
+
+def test_ranking_png_shrinks_the_list_instead_of_cutting_the_longest_row(
+    tmp_cfg, tmp_path: Path
+) -> None:
+    # this row overruns the 669px limit at 46px, and used to come out as "...UNSTOPP..."
+    names = ["SHORT ONE", "WATERMELON WIELDER, UNSTOPPABLE", "TINY"]
+    out = render.ranking_png(names, 1, tmp_path / "r.png", tmp_cfg.compiler.font, 46)
+
+    box = Image.open(out).getbbox()
+    assert box[2] <= int(render.WIDTH * 0.62) + render.WIDTH // 8
+    # the whole row survives: at the shrunk size it fits, so no word and no ellipsis
+    font = render._load_font(tmp_cfg.compiler.font, 46)
+    draw = ImageDraw.Draw(Image.new("RGBA", (render.WIDTH, render.HEIGHT)))
+    shrunk = render._row_font(draw, [f"2. {names[1]}"], tmp_cfg.compiler.font, 46, int(render.WIDTH * 0.62))
+    assert shrunk.size < font.size
+    assert render._fit(draw, f"2. {names[1]}", shrunk, int(render.WIDTH * 0.62)).endswith("UNSTOPPABLE")
+
+
+def test_fit_drops_whole_words_before_reaching_for_the_ellipsis(tmp_cfg) -> None:
+    draw = ImageDraw.Draw(Image.new("RGBA", (render.WIDTH, render.HEIGHT)))
+    font = render._load_font(tmp_cfg.compiler.font, 46)
+
+    fitted = render._fit(draw, "1. WATERMELON WIELDER, UNSTOPPABLE", font, int(render.WIDTH * 0.62))
+
+    assert fitted == "1. WATERMELON WIELDER"
 
 
 # --- render ------------------------------------------------------------------------
