@@ -1,0 +1,33 @@
+services:
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://animals:animals@db:5432/animals
+    env_file:
+      # .env отсутствует по умолчанию — создайте из .env.example (PEXELS_API_KEY и т.д.)
+      - path: .env
+        required: false
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: animals
+      POSTGRES_PASSWORD: animals
+      POSTGRES_DB: animals
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U animals -d animals"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+volumes:
+  db-data:

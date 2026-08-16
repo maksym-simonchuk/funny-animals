@@ -1,0 +1,83 @@
+app:
+  name: funny-animals-enricher
+  version: "1.0.0"
+  debug: false
+  log_level: INFO
+
+storage:
+  database: sqlite:///data/animal_videos.db
+  video_path: data/videos
+  thumbnail_path: data/thumbnails
+  frame_path: data/frames
+  log_path: data/logs
+  model_path: data/models
+  max_file_size: 100
+  concurrency: 4
+
+collectors:
+  # Flip `enabled` to true once the matching key is in .env — the app refuses to
+  # start with an enabled collector whose key is missing.
+  pexels:   {enabled: false, api_key: "${PEXELS_API_KEY}",  rate_limit: 200}
+  pixabay:  {enabled: false, api_key: "${PIXABAY_API_KEY}", rate_limit: 100}
+  # No openverse: its public API only indexes images and audio, there is no video endpoint.
+  ytdlp:    {enabled: true, delay_min: 3, delay_max: 5, retries: 3}
+
+browser_mode:
+  # Local queue the Chrome extension posts reel URLs into. Off by default; the
+  # scroll pacing and the tag filter live in the extension popup, not here.
+  enabled: true
+  ingest_token: "${BROWSER_INGEST_TOKEN}"
+  max_queue_size: 1000
+  poll_interval: 10
+
+processing:
+  video:
+    target_format: mp4
+    target_codec: h264
+    # 1920 by height: the source reels are 1080x1920, and downscaling them now
+    # would throw away the resolution the shorts assembly needs later.
+    target_resolution: 1920
+    extract_frames: true
+    frame_interval: 2
+    min_duration: 5
+    max_duration: 60
+  animal_detection:
+    model: yolov8n.pt
+    confidence_threshold: 0.4
+    classes: [cat, dog, bird, horse, sheep, cow, elephant, bear, zebra, giraffe]
+  quality:
+    min_resolution: 240
+    min_brightness: 20.0
+    # 15, not 50: reels are motion-blurred and heavily re-compressed, so their Laplacian
+    # variance runs low (measured on 146 clips: p25 27, median 77). At 50 the gate threw
+    # out 64 of 146 perfectly watchable videos; 15 only catches the genuinely unusable.
+    min_sharpness: 15.0
+
+compiler:
+  # Local Ollama, nothing leaves the machine: `ollama serve` + `ollama pull qwen3:8b`.
+  model: qwen3:8b
+  # Vision pass: looks at one frame per clip so the captions describe what is really
+  # there. "" turns it off. Pull it with: ollama pull qwen2.5vl:7b
+  vision_model: qwen2.5vl:7b
+  host: http://127.0.0.1:11434
+  temperature: 0.8
+  clips_per_short: 5
+  segment_seconds: 8
+  transition_seconds: 0.35
+  # Music bed lifted from the loudest clip's own audio, mixed under everything. Off by
+  # default: reel audio already sits near 0 dBFS, so a second track on top clips and
+  # phases against the clip it was taken from. The clips keep their own sound regardless,
+  # loudness-matched to -16 LUFS. Try 0.15 if you want a bed anyway.
+  music_volume: 0.0
+  output_path: data/shorts
+  # Text is drawn by Pillow, not ffmpeg drawtext -- the local ffmpeg has no libfreetype.
+  font: /System/Library/Fonts/Supplemental/Impact.ttf
+  title_size: 92      # рубрика сверху
+  caption_size: 72    # хук на первом клипе
+  ranking_size: 46    # список из 5 слева
+
+export:
+  formats: [coco, webdataset, huggingface]
+  include_metadata: true
+  train_test_split: 0.8
+  shard_bytes: 1000000000

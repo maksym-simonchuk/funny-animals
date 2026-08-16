@@ -1,0 +1,108 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  width: 300px;
+  margin: 0;
+  padding: 12px;
+  font-size: 13px;
+}
+
+h1 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+section {
+  margin-bottom: 12px;
+}
+
+label {
+  display: block;
+  margin-bottom: 2px;
+  opacity: 0.75;
+}
+
+input[type="url"],
+input[type="password"],
+input[type="number"],
+textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 6px;
+  margin-bottom: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.5);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+textarea {
+  resize: vertical;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 90px;
+  align-items: center;
+  gap: 2px 8px;
+}
+
+.grid label {
+  margin: 0;
+}
+
+.grid input {
+  margin: 0;
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  opacity: 0.7;
+}
+
+.stats {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 0;
+}
+
+button {
+  flex: 1;
+  padding: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.5);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:hover {
+  background: rgba(128, 128, 128, 0.15);
+}
+
+.primary {
+  width: 100%;
+  padding: 8px;
+  font-weight: 600;
+  border-color: #1a7f37;
+  color: #1a7f37;
+}
+
+.primary.running {
+  border-color: #b00020;
+  color: #b00020;
+}

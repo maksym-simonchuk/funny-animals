@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "Reel URL Collector (local research)",
+  "version": "1.0.0",
+  "description": "Collects post URLs from the feed you are browsing and queues them on your own machine.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://www.instagram.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.instagram.com/*"],
+      "js": ["defaults.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Reel URL Collector"
+  }
+}

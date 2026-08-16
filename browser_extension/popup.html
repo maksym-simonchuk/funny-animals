@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <h1>Сбор ссылок на видео</h1>
+
+    <section>
+      <label for="serverUrl">Сервер</label>
+      <input id="serverUrl" type="url" placeholder="http://127.0.0.1:8000" />
+      <label for="token">Токен приёма</label>
+      <input id="token" type="password" placeholder="BROWSER_INGEST_TOKEN" />
+    </section>
+
+    <section>
+      <button id="run" class="primary">Старт</button>
+    </section>
+
+    <section>
+      <label for="animalTags">Теги животных (через запятую)</label>
+      <textarea id="animalTags" rows="3"></textarea>
+      <label for="funnyTags">Теги «смешное» (пусто — не проверять)</label>
+      <textarea id="funnyTags" rows="2"></textarea>
+      <p class="hint">
+        Пост попадает в очередь, только если совпал с обоими списками. Оба списка
+        пустые — сохраняется всё подряд.
+      </p>
+    </section>
+
+    <section>
+      <div class="grid">
+        <label for="minDuration">Длительность, от с</label><input id="minDuration" type="number" min="0" step="1" />
+        <label for="maxDuration">до с</label><input id="maxDuration" type="number" min="1" step="1" />
+        <label for="stepPx">Шаг, px</label><input id="stepPx" type="number" min="100" step="50" />
+        <label for="minInterval">Пауза от, мс</label><input id="minInterval" type="number" min="500" step="100" />
+        <label for="maxInterval">Пауза до, мс</label><input id="maxInterval" type="number" min="500" step="100" />
+        <label for="pauseAfter">Долгая пауза каждые</label><input id="pauseAfter" type="number" min="0" step="1" />
+        <label for="pauseSeconds">Долгая пауза, с</label><input id="pauseSeconds" type="number" min="0" step="5" />
+        <label for="maxScrolls">Максимум постов</label><input id="maxScrolls" type="number" min="1" step="10" />
+      </div>
+      <p class="hint">
+        Прокрутка останавливается сама: конец ленты, лимит постов или переключение
+        вкладки. Имитации действий человека для обхода антибот-детекта здесь нет.
+      </p>
+    </section>
+
+    <section class="stats">
+      <div>Подошло: <b id="matched">0</b></div>
+      <div>Пропущено: <b id="skipped">0</b></div>
+      <div>В очереди: <b id="queueSize">0</b></div>
+    </section>
+    <p class="hint" id="status">Ожидание</p>
+
+    <section class="buttons">
+      <button id="flush">Отправить сейчас</button>
+      <button id="clear">Очистить кэш</button>
+    </section>
+
+    <script src="defaults.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

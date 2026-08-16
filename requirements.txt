@@ -1,0 +1,34 @@
+# Python 3.12 (venv). Exact pins land in requirements.lock via `pip freeze` after first install.
+# CLI
+typer>=0.15          # brings rich (progress bars, tables)
+pyyaml>=6.0
+python-dotenv>=1.0
+loguru>=0.7
+tenacity>=8.2
+
+# storage
+sqlalchemy>=2.0
+psycopg[binary]>=3.2 # postgres only; sqlite needs nothing
+
+# collectors
+aiohttp>=3.10
+yt-dlp>=2025.1.1
+
+# processing / ML
+ultralytics>=8.3     # YOLOv8n; pulls torch, torchvision, numpy, pillow, opencv
+opencv-python-headless>=4.10
+imagehash>=4.3
+
+# api
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# dev
+pytest>=8.3
+pytest-asyncio>=0.24
+# aioresponses is deliberately absent: 0.7.9 (its latest) breaks on aiohttp >= 3.12.
+# HTTP is faked by tests/fakes.py instead.
+pycocotools>=2.0     # validates COCO export in tests
+
+# extras (install manually when needed)
+# datasets>=3.0      # HuggingFace export
