@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import imagehash
 import pytest
 
+import src.processors as processors
 from src.processors import dedupe, quality, video
 from src.processors import run_processing
 from src.processors.detector import DetectionResult
@@ -44,6 +45,27 @@ def _make_video(
         cmd += ["-c:a", audio_codec]
     cmd += [str(path)]
     subprocess.run(cmd, check=True, capture_output=True)
+    return path
+
+
+def _stitch(path: Path, tmp_path: Path) -> Path:
+    """Three unrelated 2s clips end to end -- what someone else's compilation looks like."""
+    parts = []
+    for index, source in enumerate(("testsrc", "smptebars", "rgbtestsrc")):
+        part = tmp_path / f"part{index}.mp4"
+        subprocess.run(
+            ["ffmpeg", "-y", "-f", "lavfi", "-i", f"{source}=size=320x240:rate=25:duration=2",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", str(part)],
+            check=True, capture_output=True,
+        )
+        parts.append(part)
+
+    listing = tmp_path / "parts.txt"
+    listing.write_text("".join(f"file '{part}'\n" for part in parts))
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(path)],
+        check=True, capture_output=True,
+    )
     return path
 
 
@@ -299,6 +321,35 @@ def test_run_processing_processes_compliant_video(db, tmp_cfg, tmp_path: Path) -
     assert updated.status == VideoStatus.PROCESSED
     assert updated.sha256 is not None
     assert updated.phash
+
+
+def test_count_cuts_tells_a_single_take_from_a_stitched_one(tmp_path: Path) -> None:
+    single = _make_video(tmp_path / "single.mp4", duration=6, width=320, height=240)
+    assert video.count_cuts(single) == 0
+    assert video.count_cuts(_stitch(tmp_path / "stitched.mp4", tmp_path)) >= 2
+
+
+def test_run_processing_rejects_someone_elses_compilation(db, tmp_cfg, tmp_path: Path) -> None:
+    row = _insert_video(db, _stitch(tmp_path / "top10.mp4", tmp_path))
+
+    result = run_processing(tmp_cfg, detect_animals=False, check_quality=False)
+
+    assert result == {"processed": 0, "rejected": 1, "errors": 0, "rejected_compilation": 1}
+    assert _get_video(row.id).reject_reason == "compilation"
+
+
+def test_run_processing_rejects_a_clip_with_a_ranking_burned_into_it(
+    db, tmp_cfg, tmp_path: Path, monkeypatch
+) -> None:
+    src = tmp_path / "captioned.mp4"
+    _make_video(src, duration=6, width=640, height=360)
+    row = _insert_video(db, src)
+    monkeypatch.setattr(processors, "has_text", lambda frame, cfg: True)
+
+    result = run_processing(tmp_cfg, detect_animals=False, check_quality=False)
+
+    assert result == {"processed": 0, "rejected": 1, "errors": 0, "rejected_burned_text": 1}
+    assert _get_video(row.id).reject_reason == "burned_text"
 
 
 def test_run_processing_quality_rejects_low_resolution(db, tmp_cfg, tmp_path: Path) -> None:

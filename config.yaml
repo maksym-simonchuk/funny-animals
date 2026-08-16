@@ -41,6 +41,8 @@ processing:
     frame_interval: 2
     min_duration: 5
     max_duration: 60
+    # чужие «ТОП-10» склеены из десятка чужих клипов, у своего ролика склеек нет
+    max_cuts: 1
   animal_detection:
     model: yolov8n.pt
     confidence_threshold: 0.4

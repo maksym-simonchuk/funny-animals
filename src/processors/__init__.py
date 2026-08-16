@@ -10,6 +10,7 @@ from loguru import logger
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.compiler.plan import has_text
 from src.processors import dedupe, quality, video
 from src.processors.detector import AnimalDetector
 from src.storage import files
@@ -70,6 +71,13 @@ def _process_one(
         row.reject_reason = "duration"
         return
 
+    # someone else's compilation is a dozen clips glued end to end; the dataset wants the
+    # single take. Checked before normalize so a montage costs no transcode.
+    if video.count_cuts(path) > video_cfg.max_cuts:
+        row.status = VideoStatus.REJECTED
+        row.reject_reason = "compilation"
+        return
+
     tmp_out = path.with_suffix(".norm.mp4")
     normalized = video.normalize(path, tmp_out, cfg)
     if normalized != path:
@@ -86,6 +94,13 @@ def _process_one(
             row.status = VideoStatus.REJECTED
             row.reject_reason = result.reason
             return
+
+    # a "TOP 10 FUNNIEST CATS" burned into the picture is someone else's ranking, and ours
+    # would land on top of it. Last of the gates: it is the only one that costs a model call
+    if has_text(frame_paths[len(frame_paths) // 2], cfg.compiler):
+        row.status = VideoStatus.REJECTED
+        row.reject_reason = "burned_text"
+        return
 
     sha256 = dedupe.sha256_file(path)
     phash = dedupe.phash_frames(frame_paths)

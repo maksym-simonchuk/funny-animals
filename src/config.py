@@ -57,6 +57,7 @@ class VideoCfg:
     frame_interval: int = 5
     min_duration: float = 5.0
     max_duration: float = 60.0
+    max_cuts: int = 1  # above this a clip is someone else's compilation, not a single take
 
 
 @dataclass(frozen=True)
@@ -291,6 +292,7 @@ def load_config(path: str | Path = "config.yaml") -> Config:
                 frame_interval=int(video_raw.get("frame_interval", video_defaults.frame_interval)),
                 min_duration=float(video_raw.get("min_duration", video_defaults.min_duration)),
                 max_duration=float(video_raw.get("max_duration", video_defaults.max_duration)),
+                max_cuts=int(video_raw.get("max_cuts", video_defaults.max_cuts)),
             ),
             animal_detection=DetectionCfg(
                 model=detect_raw.get("model", detect_defaults.model),
