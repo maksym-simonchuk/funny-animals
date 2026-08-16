@@ -258,6 +258,15 @@ def test_render_segment_produces_the_shorts_canvas_with_audio(tmp_cfg, tmp_path:
     assert any(s["codec_type"] == "audio" for s in streams)
 
 
+def test_mean_volume_ignores_the_sub_bass_rumble_of_a_hand_held_clip(tmp_path: Path) -> None:
+    rumble = _make_video(tmp_path / "rumble.mp4", duration=2, tone_hz=40)
+    music = _make_video(tmp_path / "music.mp4", duration=2, tone_hz=1000)
+
+    # same amplitude, but only one of the two can be heard on a phone speaker: ranked on
+    # raw level the rumble wins and a clip of pure handling noise ends up the soundtrack
+    assert render.mean_volume(rumble) < render.mean_volume(music) - 20
+
+
 def test_render_segment_borrows_a_track_for_a_clip_with_no_audio(tmp_cfg, tmp_path: Path) -> None:
     silent = _make_video(tmp_path / "silent.mp4", duration=6)
     donor = _make_video(tmp_path / "donor.mp4", duration=2, tone_hz=440)

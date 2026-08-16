@@ -20,6 +20,10 @@ WIDTH = 1080
 HEIGHT = 1920
 _FPS = 30
 _MARGIN = 64
+# hand-held phone clips carry a wall of sub-80 Hz rumble that no phone speaker can play
+# back; left in, loudnorm spends the whole gain budget on it and the clip sounds like noise.
+# Two stages: one 12 dB/oct pass leaves a third of a loud rumble standing.
+_RUMBLE = "highpass=f=90,highpass=f=90"
 
 
 def _run(cmd: list[str]) -> None:
@@ -164,7 +168,7 @@ def render_segment(
     if has_audio or fill_audio is not None:
         # reels arrive between -30 and 0 dBFS: even the loudness out so one clip does not
         # blast after another, and leave headroom so the join has room to mix on top
-        cmd += ["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"]
+        cmd += ["-af", f"{_RUMBLE},loudnorm=I=-16:TP=-1.5:LRA=11"]
     cmd += [
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", str(out),
@@ -198,15 +202,20 @@ def _duration(path: Path) -> float:
     return float(result.stdout.strip() or 0.0)
 
 
-def mean_volume(source: Path) -> float:
-    """Mean dBFS of a file's audio, or -inf when it has none. Louder means more likely
-    to carry the clip's music rather than room noise."""
+def mean_volume(source: Path, start_s: float = 0.0, duration_s: float | None = None) -> float:
+    """Mean dBFS of what is *audible* in a file, or -inf when it has no audio at all.
+
+    Measured through the same high-pass the render applies, because phone-shot reels are
+    full of sub-80 Hz handling rumble: one of these clips reads as the loudest in the set
+    at -12 dB while 97% of that energy sits below 80 Hz, where nothing can hear it.
+    """
     if not _has_audio(source):
         return float("-inf")
-    result = subprocess.run(
-        ["ffmpeg", "-hide_banner", "-i", str(source), "-af", "volumedetect", "-f", "null", "-"],
-        capture_output=True,
-    )
+    cmd = ["ffmpeg", "-hide_banner", "-ss", f"{start_s:.3f}"]
+    if duration_s is not None:
+        cmd += ["-t", f"{duration_s:.3f}"]
+    cmd += ["-i", str(source), "-af", f"{_RUMBLE},volumedetect", "-f", "null", "-"]
+    result = subprocess.run(cmd, capture_output=True)
     for line in reversed(result.stderr.decode("utf-8", errors="replace").splitlines()):
         if "mean_volume:" in line:
             try:
@@ -216,10 +225,16 @@ def mean_volume(source: Path) -> float:
     return float("-inf")
 
 
-def extract_audio(source: Path, out: Path) -> Path:
-    """Pull a clip's audio out as an aac track, to be reused as the music bed."""
+def extract_audio(
+    source: Path, out: Path, start_s: float = 0.0, duration_s: float | None = None
+) -> Path:
+    """Pull a clip's audio out as an aac track, to be reused elsewhere in the short."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    _run(["ffmpeg", "-y", "-i", str(source), "-vn", "-c:a", "aac", "-ar", "48000", "-ac", "2", str(out)])
+    cmd = ["ffmpeg", "-y", "-ss", f"{start_s:.3f}"]
+    if duration_s is not None:
+        cmd += ["-t", f"{duration_s:.3f}"]
+    cmd += ["-i", str(source), "-vn", "-c:a", "aac", "-ar", "48000", "-ac", "2", str(out)]
+    _run(cmd)
     return out
 
 

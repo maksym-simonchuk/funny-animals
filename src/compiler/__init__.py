@@ -18,6 +18,9 @@ if TYPE_CHECKING:
     from src.config import Config
 
 _LEAD_IN = 1.0  # start a segment slightly before the animal first shows up
+# dBFS below which a track has nothing worth lending: the room tone of these reels
+# measures around -39 dB once the rumble is filtered out, real sound sits above -30
+_AUDIBLE = -35.0
 
 
 class CompileError(RuntimeError):
@@ -138,9 +141,7 @@ def _render_segments(picked, clips: list[Clip], plan: Plan, compiler_cfg, work_d
         plan.category, work_dir / "rubric.png",
         compiler_cfg.font, compiler_cfg.title_size, top=True,
     )
-    fills = _fill_audio(
-        [Path(path) for _, path, *_ in picked], clips, work_dir, compiler_cfg
-    )
+    fills = _fill_audio(picked, clips, work_dir, compiler_cfg)
     segments: list[Path] = []
     for index, (video_id, file_path, _, _, duration_s, first_ts) in enumerate(picked):
         overlays = [
@@ -169,23 +170,32 @@ def _render_segments(picked, clips: list[Clip], plan: Plan, compiler_cfg, work_d
     return segments
 
 
-def _fill_audio(
-    sources: list[Path], clips: list[Clip], work_dir: Path, compiler_cfg
-) -> dict[int, Path]:
+def _fill_audio(picked, clips: list[Clip], work_dir: Path, compiler_cfg) -> dict[int, Path]:
     """Segment index -> the track it borrows, for the clips that arrive without one.
 
     A dead-silent segment between two loud ones reads as a broken video. The fitting
     sound is already in the compilation -- the local model reads what the vision pass saw
     in each clip and matches the silent one to the soundtrack closest in mood, so nothing
-    of unknown licensing has to be imported for it.
+    of unknown licensing has to be imported for it. Only clips with something actually
+    audible can donate, and each donates the same slice the compilation shows of it.
     """
-    levels = [render.mean_volume(source) for source in sources]
+    starts = [
+        _segment_start(duration_s, first_ts, compiler_cfg.segment_seconds)
+        for _, _, _, _, duration_s, first_ts in picked
+    ]
+    # measure the slice the compilation actually shows: a clip can be loud in its intro
+    # and dead by the moment we cut into it
+    levels = [
+        render.mean_volume(Path(path), start, compiler_cfg.segment_seconds)
+        for (_, path, *_), start in zip(picked, starts)
+    ]
     silent = [index for index, level in enumerate(levels) if level == float("-inf")]
-    donors = [index for index, level in enumerate(levels) if level > float("-inf")]
     if not silent:
         return {}
+
+    donors = [index for index, level in enumerate(levels) if level > _AUDIBLE]
     if not donors:
-        logger.info("audio: every clip is silent, nothing to borrow")
+        logger.info("audio: no clip here has an audible track, the silent ones stay silent")
         return {}
 
     fills: dict[int, Path] = {}
@@ -194,7 +204,10 @@ def _fill_audio(
         donor = donors[choice]
         out = work_dir / f"fill_{donor}.m4a"
         logger.info(f"audio: clip {index + 1} borrows the track of clip {donor + 1}")
-        fills[index] = out if out.exists() else render.extract_audio(sources[donor], out)
+        if not out.exists():
+            source = Path(picked[donor][1])
+            render.extract_audio(source, out, starts[donor], compiler_cfg.segment_seconds)
+        fills[index] = out
     return fills
 
 
