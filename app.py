@@ -106,17 +106,21 @@ def compile_short(
 ) -> None:
     """Assemble processed clips into a 1080x1920 short, captioned by the local model."""
     cfg = _bootstrap()
-    from src.compiler import CompileError, PlanError, build_short
+    from src.compiler import CompileError, PlanError, build_short, keep, recall
 
-    used: set[int] = set()
-    for index in range(count):
-        try:
-            out = build_short(cfg, category or None, keep_work, used)
-        except (CompileError, PlanError) as exc:
-            console.print(f"[red]{exc}[/red]")
-            # a later short running out of unused clips is a stop, not a failure
-            raise typer.Exit(0 if index else 1) from None
-        console.print(f"[green]{out}[/green]")
+    # what earlier runs spent, or a second `compile` remakes the first one's shorts
+    used, themes = recall(cfg)
+    try:
+        for index in range(count):
+            try:
+                out = build_short(cfg, category or None, keep_work, used, themes)
+            except (CompileError, PlanError) as exc:
+                console.print(f"[red]{exc}[/red]")
+                # a later short running out of unused clips is a stop, not a failure
+                raise typer.Exit(0 if index else 1) from None
+            console.print(f"[green]{out}[/green]")
+    finally:
+        keep(cfg, used, themes)
 
 
 @app.command()

@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from PIL import Image, ImageDraw
 
-from src.compiler import CompileError, _segment_start, build_short
+from src.compiler import CompileError, _segment_start, build_short, keep, recall
 from src.compiler import plan as plan_mod
 from src.compiler import render
 from src.storage.db import session_scope
@@ -101,15 +101,17 @@ def test_make_plan_sends_a_schema_pinned_to_the_clip_count(tmp_cfg, monkeypatch)
         "captions": ["one", "two"],
     })
     clips = [
-        plan_mod.Clip(1, "dog", ["zoomies"], seen="a dog in a strawberry hat"),
+        plan_mod.Clip(1, "dog", ["zoomies"], seen="the animal is in a strawberry hat"),
         plan_mod.Clip(2, "cat", []),
     ]
 
-    result = plan_mod.make_plan(clips, tmp_cfg.compiler)
+    result = plan_mod.make_plan(clips, tmp_cfg.compiler, "Sneaky Thieves")
 
     assert result.title == "Dogs Go Wild"
+    assert result.category == "Sneaky Thieves"  # the heading comes from the grouping pass
+    assert "TOP 2 Sneaky Thieves" in sent[0]["messages"][1]["content"]
     # what the vision model saw reaches the prompt, otherwise the captions are invented
-    assert "a dog in a strawberry hat" in sent[0]["messages"][1]["content"]
+    assert "the animal is in a strawberry hat" in sent[0]["messages"][1]["content"]
     schema = sent[0]["format"]["properties"]["captions"]
     assert (schema["minItems"], schema["maxItems"]) == (2, 2)
     assert sent[0]["think"] is False  # reasoning block off, we only want the JSON
@@ -122,7 +124,7 @@ def test_make_plan_rejects_a_reply_with_the_wrong_caption_count(tmp_cfg, monkeyp
     clips = [plan_mod.Clip(1, "dog", []), plan_mod.Clip(2, "cat", [])]
 
     with pytest.raises(plan_mod.PlanError, match="1 captions for 2 clips"):
-        plan_mod.make_plan(clips, tmp_cfg.compiler)
+        plan_mod.make_plan(clips, tmp_cfg.compiler, "c")
 
 
 def test_make_plan_reports_an_unreachable_ollama(tmp_cfg, monkeypatch) -> None:
@@ -132,7 +134,7 @@ def test_make_plan_reports_an_unreachable_ollama(tmp_cfg, monkeypatch) -> None:
     monkeypatch.setattr(plan_mod.urllib.request, "urlopen", refuse)
 
     with pytest.raises(plan_mod.PlanError, match="ollama serve"):
-        plan_mod.make_plan([plan_mod.Clip(1, "dog", [])], tmp_cfg.compiler)
+        plan_mod.make_plan([plan_mod.Clip(1, "dog", [])], tmp_cfg.compiler, "c")
 
 
 # --- vision ------------------------------------------------------------------------
@@ -145,29 +147,165 @@ def test_describe_frame_sends_the_image_and_returns_one_line(tmp_cfg, tmp_path: 
 
     def fake_urlopen(request, timeout=None):
         sent.append(json.loads(request.data))
-        return io.BytesIO(json.dumps({"message": {"content": " a dog\n in a hat "}}).encode())
+        reply = {"animal": "chihuahua", "scene": " the animal\n wears a hat "}
+        return io.BytesIO(json.dumps({"message": {"content": json.dumps(reply)}}).encode())
 
     monkeypatch.setattr(plan_mod.urllib.request, "urlopen", fake_urlopen)
 
-    assert plan_mod.describe_frame(frame, cfg) == "a dog in a hat"
+    assert plan_mod.describe_frame(frame, cfg) == ("chihuahua", "the animal wears a hat")
     assert sent[0]["model"] == "qwen2.5vl:7b"
     assert sent[0]["messages"][0]["images"]  # base64 of the jpeg travelled with it
     # the species stays out of it, or the text model opens every row with it
-    assert "never name the" in sent[0]["messages"][0]["content"]
+    assert "never naming it" in sent[0]["messages"][0]["content"]
 
 
 def test_describe_frame_falls_back_quietly_when_vision_is_off_or_down(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
     frame = tmp_path / "look.jpg"
     frame.write_bytes(b"not really a jpeg")
 
-    assert plan_mod.describe_frame(frame, tmp_cfg.compiler) == ""  # vision_model="" in tests
+    assert plan_mod.describe_frame(frame, tmp_cfg.compiler) == ("", "")  # vision_model="" in tests
 
     def refuse(request, timeout=None):
         raise OSError("connection refused")
 
     monkeypatch.setattr(plan_mod.urllib.request, "urlopen", refuse)
     # a missing vision model must not sink the whole compilation
-    assert plan_mod.describe_frame(frame, replace(tmp_cfg.compiler, vision_model="x")) == ""
+    assert plan_mod.describe_frame(frame, replace(tmp_cfg.compiler, vision_model="x")) == ("", "")
+
+
+def test_heading_holds_asks_one_clip_at_a_time(tmp_cfg, monkeypatch) -> None:
+    """Asked about all five at once the model waved "Sky Watchers" through on a set where
+    one animal looked up and the rest looked at a table. One clip per question, and the
+    first lie sinks the heading."""
+    clips = [
+        plan_mod.Clip(1, "bird", [], seen="the animal is watching the sky"),
+        plan_mod.Clip(2, "bird", [], seen="the animal is walking on a table"),
+        plan_mod.Clip(3, "cat", [], seen="the animal is watching the sky"),
+    ]
+    asked: list[str] = []
+
+    def answer(prompt, question, cfg):
+        asked.append(question)
+        return "table" not in question
+
+    monkeypatch.setattr(plan_mod, "_yes_no", answer)
+
+    assert plan_mod.heading_holds("Sky Watchers", clips, tmp_cfg.compiler) is False
+    assert len(asked) == 2  # stops at the clip the heading lies about
+    assert plan_mod.heading_holds("Sky Watchers", clips[::2], tmp_cfg.compiler) is True
+
+
+def test_recall_carries_spent_clips_and_themes_between_runs(tmp_cfg) -> None:
+    """Empty at the start of every run, the second `compile` picked the same fullest
+    bucket and remade the first one's shorts as `top-5-toy-destroyers-2.mp4`."""
+    assert recall(tmp_cfg) == (set(), set())  # nothing built yet
+
+    keep(tmp_cfg, {4, 7}, {"a toy", "toy destroyers"})
+    assert recall(tmp_cfg) == ({4, 7}, {"a toy", "toy destroyers"})
+
+    (tmp_cfg.compiler.output_path.parent / "compiled.json").write_text("{ truncated")
+    assert recall(tmp_cfg) == (set(), set())  # a half-written note is not a crash
+
+
+def test_has_text_asks_vision_and_stays_quiet_when_it_is_down(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
+    frame = render.grab_frame(_make_video(tmp_path / "c.mp4", duration=1), tmp_path / "look.jpg", 0.5)
+    cfg = replace(tmp_cfg.compiler, vision_model="qwen2.5vl:7b")
+    sent = _stub_ollama(monkeypatch, {"answer": "yes"})
+
+    assert plan_mod.has_text(frame, cfg) is True
+    assert sent[0]["messages"][0]["images"]
+    # a small @handle is on nearly every reel, so it must not cost the clip its place
+    assert "does not count" in sent[0]["messages"][0]["content"]
+
+    def refuse(request, timeout=None):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(plan_mod.urllib.request, "urlopen", refuse)
+    assert plan_mod.has_text(frame, cfg) is False  # vision down keeps the clip, not drops it
+
+
+def test_group_clips_takes_the_fullest_bucket_and_strips_the_top_prefix(monkeypatch, tmp_cfg) -> None:
+    # "answer" rides along: every candidate clip and the finished heading are checked
+    sent = _stub_ollama(monkeypatch, {"theme": "TOP 3 Snack Bandits", "answer": "yes"})
+    clips = [
+        plan_mod.Clip(1, "dog", [], seen="one", tag="sleeping"),
+        plan_mod.Clip(2, "dog", [], seen="two", tag="stealing food"),
+        plan_mod.Clip(3, "dog", [], seen="three", tag="other"),
+        plan_mod.Clip(4, "dog", [], seen="four", tag="stealing food"),
+        plan_mod.Clip(5, "dog", [], seen="five", tag="stealing food"),
+        plan_mod.Clip(6, "dog", [], seen="six", tag="stealing food"),
+    ]
+
+    chosen, theme = plan_mod.group_clips(clips, 3, tmp_cfg.compiler)
+
+    # every clip in the short shares the tag, so the heading is true of all of them
+    assert chosen == [1, 3, 4]
+    assert theme == "Snack Bandits"  # the renderer prints "TOP 3" itself
+    assert any("stealing food" in message["content"]
+               for request in sent for message in request["messages"])
+
+
+def test_group_clips_drops_a_clip_the_model_says_does_not_fit(monkeypatch, tmp_cfg) -> None:
+    """The tag came out of one shot at temperature 0; the second opinion is what keeps a
+    cockatoo facing a cat out of a compilation of animals playing with a toy."""
+    def fake_fits(scene, label, cfg):
+        return scene != "two"
+
+    monkeypatch.setattr(plan_mod, "fits_tag", fake_fits)
+    monkeypatch.setattr(plan_mod, "name_theme", lambda *args, **kwargs: "Toy Destroyers")
+    clips = [
+        plan_mod.Clip(1, "dog", [], seen="one", prop="a toy"),
+        plan_mod.Clip(2, "dog", [], seen="two", prop="a toy"),
+        plan_mod.Clip(3, "dog", [], seen="three", prop="a toy"),
+        plan_mod.Clip(4, "dog", [], seen="four", prop="a toy"),
+    ]
+
+    assert plan_mod.group_clips(clips, 3, tmp_cfg.compiler) == ([0, 2, 3], "Toy Destroyers")
+
+
+def test_group_clips_moves_on_to_a_theme_this_batch_has_not_used(monkeypatch, tmp_cfg) -> None:
+    """Two shorts in a row off the pool's biggest bucket get the same heading over
+    different clips; the second one has to look elsewhere."""
+    monkeypatch.setattr(plan_mod, "fits_tag", lambda scene, label, cfg: True)
+    monkeypatch.setattr(plan_mod, "name_theme", lambda tag, *args, **kwargs: tag.title())
+    clips = [
+        plan_mod.Clip(1, "dog", [], seen="one", tag="sleeping"),
+        plan_mod.Clip(2, "dog", [], seen="two", tag="sleeping"),
+        plan_mod.Clip(3, "dog", [], seen="three", tag="sleeping"),
+        plan_mod.Clip(4, "dog", [], seen="four", tag="sleeping"),
+        plan_mod.Clip(5, "dog", [], seen="five", tag="eating"),
+        plan_mod.Clip(6, "dog", [], seen="six", tag="eating"),
+    ]
+    done: set[str] = set()
+
+    assert plan_mod.group_clips(clips, 2, tmp_cfg.compiler, done) == ([0, 1], "Sleeping")
+    # "sleeping" still has two clips going spare, and is skipped anyway
+    assert plan_mod.group_clips(clips, 2, tmp_cfg.compiler, done) == ([4, 5], "Eating")
+    # with every label spoken for, a used one comes back rather than a generic heading;
+    # the name is what has to differ, and `done` is what name_theme reads for that
+    assert plan_mod.group_clips(clips, 2, tmp_cfg.compiler, done)[0] == [0, 1]
+
+
+def test_group_clips_stays_generic_when_no_tag_can_fill_a_short(tmp_cfg) -> None:
+    clips = [
+        plan_mod.Clip(1, "dog", [], tag="sleeping"),
+        plan_mod.Clip(2, "cat", [], tag="eating"),
+        plan_mod.Clip(3, "cat", [], tag="other"),
+    ]
+
+    # a themed heading over clips that do not share the theme is the bug being fixed
+    assert plan_mod.group_clips(clips, 3, tmp_cfg.compiler) == ([0, 1, 2], "Funny Animals")
+
+
+def test_tag_clip_answers_only_from_the_list(monkeypatch, tmp_cfg) -> None:
+    sent = _stub_ollama(monkeypatch, {"tag": "stealing food"})
+
+    assert plan_mod.tag_clip("the animal takes a strawberry", tmp_cfg.compiler) == "stealing food"
+    # the enum is the decoding grammar, so an off-list answer is impossible by construction
+    assert sent[0]["format"]["properties"]["tag"]["enum"][-1] == "other"
+
+    _stub_ollama(monkeypatch, {"tag": "inventing something"})
+    assert plan_mod.tag_clip("who knows", tmp_cfg.compiler) == "other"
 
 
 # --- caption layer -----------------------------------------------------------------
@@ -194,26 +332,50 @@ def test_make_plan_cuts_a_caption_the_model_ran_long(monkeypatch, tmp_cfg) -> No
     })
     clips = [plan_mod.Clip(1, "dog", []), plan_mod.Clip(2, "dog", [])]
 
-    result = plan_mod.make_plan(clips, tmp_cfg.compiler)
+    result = plan_mod.make_plan(clips, tmp_cfg.compiler, "c")
 
     # an overlong row stops being readable in the second it is on screen, and the cut
     # must not leave it hanging on an article
     assert result.captions == ["Dachshund with a toy", "short one"]
 
 
-def test_make_plan_keeps_the_species_out_of_the_prompt_and_caps_the_bottom_line(monkeypatch, tmp_cfg) -> None:
+def test_make_plan_keeps_the_species_out_of_every_prompt_it_sends(monkeypatch, tmp_cfg) -> None:
     sent = _stub_ollama(monkeypatch, {
-        "category": "c", "title": "t", "hook": "h",
-        "captions": ["caught red pawed"], "lines": ["one two three four five six seven eight nine"],
+        "title": "t", "hook": "h", "captions": ["caught red pawed"],
+        "line": "one two three four five six seven eight nine",
     })
-    clips = [plan_mod.Clip(1, "dog", [], seen="the animal is wearing a strawberry hat")]
+    clips = [plan_mod.Clip(1, "dog", [], seen="the chihuahua wears a hat", animal="Chihuahua")]
 
-    result = plan_mod.make_plan(clips, tmp_cfg.compiler)
+    result = plan_mod.make_plan(clips, tmp_cfg.compiler, "c")
 
-    # with a description in hand the YOLO class is dropped: it is the word the model copies
-    assert "dog" not in sent[0]["messages"][1]["content"]
+    for request in sent:
+        # with a description in hand the YOLO class is dropped: it is the word the model
+        # copies -- and vision names the species often enough that it is scrubbed as well
+        assert "dog" not in request["messages"][1]["content"]
+        assert "chihuahua" not in request["messages"][1]["content"].lower()
     # the bottom caption wraps, so it may be a sentence -- but not one that covers the clip
     assert result.lines == ["one two three four five six seven eight"]
+
+
+def test_make_line_writes_one_caption_for_one_clip(monkeypatch, tmp_cfg) -> None:
+    sent = _stub_ollama(monkeypatch, {"line": "caught eating the evidence"})
+
+    line = plan_mod.make_line("the animal holds a strawberry", "STRAWBERRY BANDIT", tmp_cfg.compiler)
+
+    assert line == "caught eating the evidence"
+    # only this clip is in the prompt, so the caption cannot land on another one
+    assert "the animal holds a strawberry" in sent[0]["messages"][1]["content"]
+    assert "STRAWBERRY BANDIT" in sent[0]["messages"][1]["content"]
+
+
+def test_make_line_refuses_the_description_read_back_at_it(monkeypatch, tmp_cfg) -> None:
+    """A clip went out captioned "THE ANIMAL IS PARTIALLY HIDDEN BEHIND THE BABY," -- the
+    model gave up on the joke and returned the prompt, cut mid-sentence by the word limit."""
+    scene = "the animal is partially hidden behind the baby, watching the door"
+    sent = _stub_ollama(monkeypatch, {"line": scene})
+
+    assert plan_mod.make_line(scene, "SNEAKY GUEST", tmp_cfg.compiler) == ""
+    assert len(sent) == 2  # asked again, got the description again, goes without a caption
 
 
 def test_pick_sound_asks_the_model_which_track_suits_the_silent_clip(monkeypatch, tmp_cfg) -> None:
