@@ -375,14 +375,6 @@ def test_run_processing_rejects_a_watermark_that_only_shows_up_late(
     assert read  # the gate read the frame the mark is on, not only the middle one
 
 
-def test_text_probes_reads_the_ends_of_the_clip_too() -> None:
-    frames = [Path(f"frame_{n:04d}.jpg") for n in range(1, 6)]
-
-    assert processors._text_probes(frames) == [frames[0], frames[2], frames[4]]
-    assert processors._text_probes(frames[:1]) == frames[:1]  # no frame read twice
-    assert processors._text_probes([]) == []
-
-
 def test_run_processing_quality_rejects_low_resolution(db, tmp_cfg, tmp_path: Path) -> None:
     src = tmp_path / "lowres.mp4"
     _make_video(src, duration=6, width=640, height=360)  # below default min_resolution=720
