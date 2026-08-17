@@ -214,8 +214,10 @@ def test_has_text_asks_vision_and_stays_quiet_when_it_is_down(tmp_cfg, tmp_path:
 
     assert plan_mod.has_text(frame, cfg) is True
     assert sent[0]["messages"][0]["images"]
-    # a small @handle is on nearly every reel, so it must not cost the clip its place
-    assert "does not count" in sent[0]["messages"][0]["content"]
+    # the question used to wave small handles through, and a TikTok watermark reached a
+    # finished short that way -- TikTok suppresses reach on another platform's mark
+    assert "username" in sent[0]["messages"][0]["content"]
+    assert "does not count" not in sent[0]["messages"][0]["content"]
 
     def refuse(request, timeout=None):
         raise OSError("connection refused")

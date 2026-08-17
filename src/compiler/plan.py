@@ -369,18 +369,22 @@ def describe_frame(frame: Path, cfg: "CompilerCfg") -> tuple[str, str]:
     return animal, " ".join(str(data.get("scene") or "").split())[:200]
 
 
-_TEXT = ("Look at the picture. Is there large text burned into it -- a caption, a title, a "
-         "subtitle or a numbered list? A small username, logo or channel handle does not "
-         "count. Answer yes or no.")
+_TEXT = ("Look at the picture. Is there ANY text or logo burned into it -- a caption, a "
+         "title, a subtitle, a numbered list, a username or @handle, a platform watermark "
+         "such as TikTok or Instagram, an app or studio name in a corner? Look in all four "
+         "corners and along both edges, however small or faint it is. Answer yes or no.")
 
 
 def has_text(frame: Path, cfg: "CompilerCfg") -> bool:
-    """Does the clip already carry its own caption?
+    """Does the clip carry burned-in text or someone else's watermark?
 
     A reel that came with a "Top 10 Funniest Cats" list burned into the picture puts two
-    rankings on the screen at once and reads as broken. The small @handle every reel
-    carries is fine, so the question says so -- asked this way the model got all eight
-    probe clips right.
+    rankings on the screen at once and reads as broken.
+
+    The question used to end with "a small username, logo or channel handle does not
+    count", and that sentence is what let a TikTok watermark and a "Dola AI" corner mark
+    into a finished short. TikTok suppresses reach on video wearing another platform's
+    mark, so now anything burned in counts, however small.
     """
     if not cfg.vision_model:
         return False

@@ -53,6 +53,14 @@ def run_processing(cfg: "Config", detect_animals: bool, check_quality: bool) -> 
     return result
 
 
+def _text_probes(frames: list[Path]) -> list[Path]:
+    """The frames the burned-text gate reads: first, middle, last, without repeats."""
+    if not frames:
+        return []
+    picks = [frames[0], frames[len(frames) // 2], frames[-1]]
+    return list(dict.fromkeys(picks))
+
+
 def _process_one(
     session: Session, row: Video, cfg: "Config", *, detector: AnimalDetector | None, check_quality: bool
 ) -> None:
@@ -97,7 +105,11 @@ def _process_one(
 
     # a "TOP 10 FUNNIEST CATS" burned into the picture is someone else's ranking, and ours
     # would land on top of it. Last of the gates: it is the only one that costs a model call
-    if has_text(frame_paths[len(frame_paths) // 2], cfg.compiler):
+    #
+    # Three frames, not one: a watermark that fades in after two seconds, or a caption that
+    # is only on the punchline, is invisible in the middle frame. `any` stops at the first
+    # yes, so a clip that is going to be rejected usually costs one call anyway.
+    if any(has_text(frame, cfg.compiler) for frame in _text_probes(frame_paths)):
         row.status = VideoStatus.REJECTED
         row.reject_reason = "burned_text"
         return

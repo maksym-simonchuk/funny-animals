@@ -352,6 +352,37 @@ def test_run_processing_rejects_a_clip_with_a_ranking_burned_into_it(
     assert _get_video(row.id).reject_reason == "burned_text"
 
 
+def test_run_processing_rejects_a_watermark_that_only_shows_up_late(
+    db, tmp_cfg, tmp_path: Path, monkeypatch
+) -> None:
+    """One middle frame let a TikTok handle and a "Dola AI" corner mark through into a
+    finished short: both fade in after the clip has started."""
+    src = tmp_path / "late-mark.mp4"
+    _make_video(src, duration=6, width=640, height=360)
+    row = _insert_video(db, src)
+    read: list[Path] = []
+
+    def only_the_last(frame: Path, cfg) -> bool:
+        read.append(frame)
+        return frame == sorted(frame.parent.glob("frame_*.jpg"))[-1]
+
+    monkeypatch.setattr(processors, "has_text", only_the_last)
+
+    result = run_processing(tmp_cfg, detect_animals=False, check_quality=False)
+
+    assert result == {"processed": 0, "rejected": 1, "errors": 0, "rejected_burned_text": 1}
+    assert _get_video(row.id).reject_reason == "burned_text"
+    assert read  # the gate read the frame the mark is on, not only the middle one
+
+
+def test_text_probes_reads_the_ends_of_the_clip_too() -> None:
+    frames = [Path(f"frame_{n:04d}.jpg") for n in range(1, 6)]
+
+    assert processors._text_probes(frames) == [frames[0], frames[2], frames[4]]
+    assert processors._text_probes(frames[:1]) == frames[:1]  # no frame read twice
+    assert processors._text_probes([]) == []
+
+
 def test_run_processing_quality_rejects_low_resolution(db, tmp_cfg, tmp_path: Path) -> None:
     src = tmp_path / "lowres.mp4"
     _make_video(src, duration=6, width=640, height=360)  # below default min_resolution=720
