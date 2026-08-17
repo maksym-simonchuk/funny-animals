@@ -77,6 +77,10 @@ compiler:
   title_size: 92      # рубрика сверху
   caption_size: 72    # хук на первом клипе
   ranking_size: 46    # список из 5 слева
+  # призыв мелким шрифтом под рубрикой; {category} -- заголовок без "TOP 5".
+  # Пустая строка убирает его совсем.
+  cta: "Like if you love {category} too"
+  cta_size: 40
 
 export:
   formats: [coco, webdataset, huggingface]

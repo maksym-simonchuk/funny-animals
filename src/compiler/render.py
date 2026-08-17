@@ -57,24 +57,57 @@ def _wrap(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont, ma
     return lines
 
 
-def caption_png(text: str, out: Path, font_path: str, size: int, top: bool) -> Path:
-    """Draw `text` as white-on-stroke onto a transparent 1080x1920 layer."""
+def _stroked(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.FreeTypeFont,
+             y: int, size: int) -> None:
+    """One centred line, white with a black outline -- legible over any clip."""
+    x = (WIDTH - draw.textlength(text, font=font)) / 2
+    draw.text(
+        (x, y), text, font=font, fill=(255, 255, 255, 255),
+        stroke_width=max(2, size // 12), stroke_fill=(0, 0, 0, 255),
+    )
+
+
+def caption_png(text: str, out: Path, font_path: str, size: int) -> Path:
+    """Draw `text` along the bottom of a transparent 1080x1920 layer."""
     layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
     font = _load_font(font_path, size)
 
     lines = _wrap(draw, text.upper(), font, WIDTH - 2 * _MARGIN)
     line_height = int(size * 1.15)
-    block_height = line_height * len(lines)
-    y = _MARGIN * 3 if top else HEIGHT - _MARGIN * 3 - block_height
+    y = HEIGHT - _MARGIN * 3 - line_height * len(lines)
 
     for line in lines:
-        x = (WIDTH - draw.textlength(line, font=font)) / 2
-        draw.text(
-            (x, y), line, font=font, fill=(255, 255, 255, 255),
-            stroke_width=max(2, size // 12), stroke_fill=(0, 0, 0, 255),
-        )
+        _stroked(draw, line, font, y, size)
         y += line_height
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    layer.save(out)
+    return out
+
+
+def rubric_png(title: str, cta: str, out: Path, font_path: str, size: int,
+               cta_size: int) -> Path:
+    """The heading with the small like-prompt under it, on one layer.
+
+    Drawn together because the prompt has to start below whatever the heading wrapped to:
+    at a fixed y it lands on the second line of "TOP 5 PROFESSIONAL LOUNGERS".
+    """
+    layer = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    font = _load_font(font_path, size)
+
+    y = _MARGIN * 3
+    for line in _wrap(draw, title.upper(), font, WIDTH - 2 * _MARGIN):
+        _stroked(draw, line, font, y, size)
+        y += int(size * 1.15)
+
+    if cta:
+        small = _load_font(font_path, cta_size)
+        y += cta_size // 2  # the prompt is a second thought, not the heading's third line
+        for line in _wrap(draw, cta.upper(), small, WIDTH - 2 * _MARGIN):
+            _stroked(draw, line, small, y, cta_size)
+            y += int(cta_size * 1.15)
 
     out.parent.mkdir(parents=True, exist_ok=True)
     layer.save(out)

@@ -235,9 +235,12 @@ def _look_at_clips(picked, compiler_cfg, work_dir: Path) -> list[Clip]:
 def _render_segments(picked, clips: list[Clip], plan: Plan, compiler_cfg, work_dir: Path) -> list[Path]:
     # the rubric is the same on every clip, so it is drawn once. It says how many rows the
     # ranking has, so a viewer landing mid-clip knows there is a countdown to stay for.
-    rubric = render.caption_png(
-        f"TOP {len(picked)} {plan.category}", work_dir / "rubric.png",
-        compiler_cfg.font, compiler_cfg.title_size, top=True,
+    rubric = render.rubric_png(
+        f"TOP {len(picked)} {plan.category}",
+        # replace, not format: a stray brace in a hand-edited template is a typo, not a crash
+        compiler_cfg.cta.replace("{category}", plan.category),
+        work_dir / "rubric.png",
+        compiler_cfg.font, compiler_cfg.title_size, compiler_cfg.cta_size,
     )
     fills = _fill_audio(picked, clips, work_dir, compiler_cfg)
     segments: list[Path] = []
@@ -257,7 +260,7 @@ def _render_segments(picked, clips: list[Clip], plan: Plan, compiler_cfg, work_d
             overlays.append(
                 render.caption_png(
                     line, work_dir / f"line_{index}.png",
-                    compiler_cfg.font, compiler_cfg.caption_size, top=False,
+                    compiler_cfg.font, compiler_cfg.caption_size,
                 )
             )
         start = _segment_start(duration_s, first_ts, compiler_cfg.segment_seconds)

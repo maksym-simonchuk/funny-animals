@@ -314,7 +314,7 @@ def test_tag_clip_answers_only_from_the_list(monkeypatch, tmp_cfg) -> None:
 def test_caption_png_is_a_transparent_canvas_with_wrapped_text(tmp_cfg, tmp_path: Path) -> None:
     out = render.caption_png(
         "a very long caption that has to wrap across several lines to fit",
-        tmp_path / "cap.png", tmp_cfg.compiler.font, 72, top=False,
+        tmp_path / "cap.png", tmp_cfg.compiler.font, 72,
     )
 
     image = Image.open(out)
@@ -323,6 +323,21 @@ def test_caption_png_is_a_transparent_canvas_with_wrapped_text(tmp_cfg, tmp_path
     # text sits in the lower half and leaves the upper-left corner untouched
     assert image.getpixel((0, 0))[3] == 0
     assert image.crop((0, render.HEIGHT // 2, render.WIDTH, render.HEIGHT)).getbbox() is not None
+
+
+def test_rubric_png_puts_the_cta_under_the_wrapped_heading(tmp_cfg, tmp_path: Path) -> None:
+    """At a fixed y the prompt lands on the second line of a heading that wrapped, so it
+    starts below whatever the heading actually used."""
+    font, cta = tmp_cfg.compiler.font, "like if you love them too"
+    one = render.rubric_png("TOP 5 DOGS", cta, tmp_path / "a.png", font, 92, 40)
+    two = render.rubric_png("TOP 5 PROFESSIONAL LOUNGERS", cta, tmp_path / "b.png", font, 92, 40)
+
+    assert Image.open(one).getbbox()[3] < Image.open(two).getbbox()[3]  # two lines push it down
+    # and the ranking sits mid-frame, well clear of the whole top block
+    assert Image.open(two).getbbox()[3] < render.HEIGHT // 3
+
+    bare = render.rubric_png("TOP 5 DOGS", "", tmp_path / "c.png", font, 92, 40)
+    assert Image.open(bare).getbbox()[3] < Image.open(one).getbbox()[3]  # "" drops the prompt
 
 
 def test_make_plan_cuts_a_caption_the_model_ran_long(monkeypatch, tmp_cfg) -> None:
@@ -459,7 +474,7 @@ def test_fit_drops_whole_words_before_reaching_for_the_ellipsis(tmp_cfg) -> None
 
 def test_render_segment_produces_the_shorts_canvas_with_audio(tmp_cfg, tmp_path: Path) -> None:
     source = _make_video(tmp_path / "clip.mp4", duration=6, width=640, height=360)
-    overlay = render.caption_png("hi", tmp_path / "o.png", tmp_cfg.compiler.font, 72, top=True)
+    overlay = render.caption_png("hi", tmp_path / "o.png", tmp_cfg.compiler.font, 72)
 
     out = render.render_segment(source, tmp_path / "seg.mp4", 1.0, 2.0, [overlay])
 

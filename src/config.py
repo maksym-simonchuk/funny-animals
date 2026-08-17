@@ -120,6 +120,9 @@ class CompilerCfg:
     title_size: int = 92
     caption_size: int = 72
     ranking_size: int = 46
+    # printed small under the heading; {category} is the heading without its "TOP 5"
+    cta: str = "Like if you love {category} too"
+    cta_size: int = 40
 
 
 @dataclass(frozen=True)
@@ -212,6 +215,8 @@ def _parse_compiler(raw: dict[str, Any]) -> CompilerCfg:
         title_size=int(raw.get("title_size", defaults.title_size)),
         caption_size=int(raw.get("caption_size", defaults.caption_size)),
         ranking_size=int(raw.get("ranking_size", defaults.ranking_size)),
+        cta=str(raw.get("cta", defaults.cta)),
+        cta_size=int(raw.get("cta_size", defaults.cta_size)),
     )
 
 
