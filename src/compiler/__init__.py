@@ -13,8 +13,8 @@ from sqlalchemy import func, select
 
 from src.compiler import render
 from src.compiler.plan import (
-    Clip, Plan, PlanError, describe_frames, group_clips, has_text, make_plan, name_theme,
-    pick_sound, rate_clip, tag_clip, tag_prop, unload,
+    Clip, Plan, PlanError, describe_frames, group_clips, has_text, make_copy, make_plan,
+    name_theme, pick_sound, rate_clip, tag_clip, tag_prop, unload,
 )
 from src.storage.db import session_scope
 from src.storage.models import Detection, Video, VideoStatus
@@ -187,6 +187,13 @@ def build_short(
     finally:
         if not keep_work:
             shutil.rmtree(work_dir, ignore_errors=True)
+
+    # the copy is written after the render, and its failure does not undo one: a short
+    # with no caption file is a caption away from being postable, a lost render is not
+    try:
+        out.with_suffix(".txt").write_text(make_copy(clips, plan, compiler_cfg))
+    except PlanError as exc:
+        logger.warning(f"no caption file for {out.name}: {exc}")
 
     if used is not None:
         used.update(video_id for video_id, *_ in picked)

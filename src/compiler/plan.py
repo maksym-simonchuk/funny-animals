@@ -283,6 +283,87 @@ class PlanError(RuntimeError):
     """The model is unreachable or answered with something unusable."""
 
 
+_COPY_SYSTEM = (
+    "You write the post copy that ships with a finished YouTube Shorts compilation of "
+    "funny animal clips. Write in English. You are given what each clip shows and the "
+    "heading the compilation carries on screen; everything you write has to be true of "
+    "those clips. Never name a species the clips do not show, never promise a clip that "
+    "is not in the list. The two platforms want opposite things and must not read alike: "
+    "YouTube is searchable, so its title says plainly what the video is; TikTok is a "
+    "scroll, so its caption is bait -- open on the one clip worth stopping for, and make "
+    "the reader want to see how it ends."
+)
+
+# YouTube cuts a title off at 100 characters, and it is the searchable half of the copy
+_YT_TITLE_MAX = 100
+
+
+def make_copy(clips: list[Clip], plan: Plan, cfg: "CompilerCfg") -> str:
+    """The sidecar text that ships next to the .mp4: a YouTube title and description,
+    then a clickbait TikTok caption. Raises PlanError on failure."""
+    prompt = (
+        f"Clips:\n{_describe(clips)}\n\n"
+        f'The compilation is on screen as "TOP {len(clips)} {plan.category}".\n\n'
+        f"Write:\n"
+        f"1. youtube_title -- under {_YT_TITLE_MAX} characters, says what the video is, "
+        f"ends with #Shorts.\n"
+        f"2. youtube_description -- two or three sentences on what is in it, then one "
+        f"line of five to eight hashtags.\n"
+        f"3. tiktok_caption -- two lines at most. Open on the single funniest clip "
+        f"without giving away how it ends, then a line of three to six hashtags. "
+        f"Emoji are fine here and nowhere else."
+    )
+    payload = {
+        "model": cfg.model,
+        "stream": False,
+        "think": False,
+        "format": {
+            "type": "object",
+            "properties": {
+                "youtube_title": {"type": "string"},
+                "youtube_description": {"type": "string"},
+                "tiktok_caption": {"type": "string"},
+            },
+            "required": ["youtube_title", "youtube_description", "tiktok_caption"],
+        },
+        "options": {"temperature": cfg.temperature},
+        "messages": [
+            {"role": "system", "content": _COPY_SYSTEM},
+            {"role": "user", "content": prompt},
+        ],
+    }
+
+    for attempt in range(2):
+        body = _chat(payload, cfg)
+        try:
+            data = json.loads((body.get("message") or {}).get("content") or "")
+        except json.JSONDecodeError as exc:
+            raise PlanError(f"the model did not answer with JSON: {exc}") from exc
+        title = " ".join(str(data.get("youtube_title", "")).split())
+        if len(title) <= _YT_TITLE_MAX:
+            break
+        # one more try, then the truncation: a title cut mid-word is worse than a short one
+        logger.info(f"youtube title is {len(title)} characters, asking again")
+        if attempt:
+            title = _clip_words(title, _YT_TITLE_MAX)
+
+    if not title:
+        raise PlanError("the model returned an empty youtube title")
+    description = str(data.get("youtube_description", "")).strip()
+    tiktok = str(data.get("tiktok_caption", "")).strip()
+    return (
+        f"YOUTUBE SHORTS\n{title}\n\n{description}\n\n"
+        f"TIKTOK\n{tiktok}\n"
+    )
+
+
+def _clip_words(text: str, limit: int) -> str:
+    """`text` cut to `limit` characters on a word boundary."""
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(" ,-")
+
+
 def _schema(clip_count: int) -> dict:
     """JSON schema constraining the reply. Ollama turns this into a decoding grammar,
     so the model cannot emit prose, and cannot return the wrong number of captions."""

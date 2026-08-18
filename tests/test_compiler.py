@@ -670,6 +670,61 @@ def test_look_at_clips_looks_again_only_at_what_an_older_cache_wrote(tmp_cfg, tm
     assert json.loads(cache_path.read_text())["7"]["score"] == 3
 
 
+# --- post copy ----------------------------------------------------------------------
+
+
+def test_make_copy_lays_out_both_platforms(tmp_cfg, monkeypatch) -> None:
+    _stub_ollama(monkeypatch, {
+        "youtube_title": "Top 5 Tall Boys #Shorts",
+        "youtube_description": "Five animals on their hind legs.\n#animals #shorts",
+        "tiktok_caption": "The alpaca refuses to move 😭\n#fyp #animals",
+    })
+    clips = [plan_mod.Clip(1, "dog", [], seen="the animal stands on its hind legs")]
+    plan = plan_mod.Plan(category="Tall Boys", title="Tall Boys", hook="", captions=[], lines=[])
+
+    text = plan_mod.make_copy(clips, plan, tmp_cfg.compiler)
+
+    assert text.splitlines()[0] == "YOUTUBE SHORTS"
+    assert "Top 5 Tall Boys #Shorts" in text
+    # the TikTok half comes second, and the two are not the same copy twice
+    assert text.index("TIKTOK") > text.index("Top 5 Tall Boys")
+    assert "The alpaca refuses to move" in text
+
+
+def test_make_copy_trims_a_youtube_title_over_the_limit(tmp_cfg, monkeypatch) -> None:
+    long_title = "Absolutely " * 12 + "Tall Boys"
+    sent = _stub_ollama(monkeypatch, {
+        "youtube_title": long_title,
+        "youtube_description": "d", "tiktok_caption": "t",
+    })
+    plan = plan_mod.Plan(category="Tall Boys", title="Tall Boys", hook="", captions=[], lines=[])
+
+    text = plan_mod.make_copy([plan_mod.Clip(1, "dog", [])], plan, tmp_cfg.compiler)
+
+    title = text.splitlines()[1]
+    assert len(sent) == 2  # asked once more before cutting it
+    assert len(title) <= 100 and not title.endswith("Absolutel")  # cut on a word boundary
+
+
+def test_build_short_writes_the_copy_next_to_the_mp4(db, tmp_cfg, tmp_path: Path, monkeypatch) -> None:
+    _stub_ollama(monkeypatch, {
+        "category": "Paws", "title": "Dogs Go Wild", "hook": "Watch this",
+        "captions": ["one", "two"],
+        "youtube_title": "Top 5 Dogs Going Wild #Shorts",
+        "youtube_description": "Five dogs, one couch.\n#dogs #shorts",
+        "tiktok_caption": "Number 1 broke me 😭\n#fyp",
+    })
+    for index in range(2):
+        _insert_clip(_make_video(tmp_path / f"clip{index}.mp4", duration=6), f"v{index}", first_ts=1.0)
+
+    out = build_short(tmp_cfg)
+
+    copy = out.with_suffix(".txt")
+    assert copy.is_file()
+    assert "Top 5 Dogs Going Wild #Shorts" in copy.read_text()
+    assert "TIKTOK" in copy.read_text()
+
+
 # --- end to end --------------------------------------------------------------------
 
 
