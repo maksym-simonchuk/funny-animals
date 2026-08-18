@@ -12,8 +12,8 @@ from sqlalchemy import func, select
 
 from src.compiler import render
 from src.compiler.plan import (
-    Clip, Plan, PlanError, describe_frame, group_clips, has_text, make_plan, pick_sound,
-    tag_clip, tag_prop, unload,
+    Clip, Plan, PlanError, describe_frames, group_clips, has_text, make_plan, pick_sound,
+    rate_clip, tag_clip, tag_prop, unload,
 )
 from src.storage.db import session_scope
 from src.storage.models import Detection, Video, VideoStatus
@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from src.config import Config
 
 _LEAD_IN = 1.0  # start a segment slightly before the animal first shows up
+# bump to re-look at the whole pool: v1 saw one frame per clip and rated none of them
+_CACHE_V = 2
 # dBFS below which a track has nothing worth lending: the room tone of these reels
 # measures around -39 dB once the rumble is filtered out, real sound sits above -30
 _AUDIBLE = -35.0
@@ -168,15 +170,40 @@ def build_short(
     return out
 
 
+def _look_times(start_s: float, segment_s: float) -> list[float]:
+    """The three moments of the segment the vision pass looks at.
+
+    Fractions rather than fixed offsets, so they stay inside a segment of any length. Not
+    the very first and last frame: a cut lands on motion blur often enough to waste one of
+    the three looks.
+    """
+    return [start_s + segment_s * fraction for fraction in (0.1, 0.5, 0.9)]
+
+
+def _save(cache_path: Path, cache: dict) -> None:
+    """Checkpoint the vision cache. Written after each pass, not once at the end: a first
+    run over a pool of 200 clips is the better part of an hour of local inference, and
+    losing all of it to a crash on the last clip is not a thing to find out about."""
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps(cache, indent=1))
+
+
 def _look_at_clips(picked, compiler_cfg, work_dir: Path) -> list[Clip]:
-    """Show the vision model a frame from the middle of every clip in the pool.
+    """Show the vision model three frames of every clip in the pool, then label them.
 
     The database knows only the animal class -- ``tags`` come back empty and ``title`` is
     just "Video by <author>" -- so without this pass there is nothing to group the clips
     on and the captions are pure invention.
 
-    Descriptions are cached on disk by video id: a batch of nineteen shorts walks the same
-    pool nineteen times, and each look costs about five seconds of local inference.
+    Two passes over the pool, not one visit per clip: the vision model and the text model
+    are ~6 GB each, and alternating between them clip by clip is what puts the machine
+    into swap. Everything that reads pixels happens first, the vision model is dropped,
+    and only then do the labels, which read the description, get asked.
+
+    Descriptions, the rating and both labels are cached on disk by video id: a batch of
+    nineteen shorts walks the same pool nineteen times, and one look costs the better part
+    of fifteen seconds of local inference. Entries written by an older version are looked
+    at again -- ``_CACHE_V`` 1 saw a single frame per clip and rated nothing.
     """
     cache_path = compiler_cfg.output_path.parent / "vision.json"
     try:
@@ -184,51 +211,62 @@ def _look_at_clips(picked, compiler_cfg, work_dir: Path) -> list[Clip]:
     except (OSError, json.JSONDecodeError):
         cache = {}
 
+    looked = 0
+    for index, (video_id, file_path, _, _, duration_s, first_ts) in enumerate(picked):
+        if (cache.get(str(video_id)) or {}).get("v") == _CACHE_V:
+            continue
+        start = _segment_start(duration_s, first_ts, compiler_cfg.segment_seconds)
+        # with vision off there is nothing to show them to, and three ffmpeg calls per
+        # clip is not a cheap way to produce nothing
+        frames = [
+            render.grab_frame(Path(file_path), work_dir / f"look_{index}_{number}.jpg", at)
+            for number, at in enumerate(_look_times(start, compiler_cfg.segment_seconds))
+        ] if compiler_cfg.vision_model else []
+
+        animal, scene = describe_frames(frames, compiler_cfg)
+        entry = {
+            "v": _CACHE_V, "animal": animal, "scene": scene,
+            "text": has_text(frames, compiler_cfg),
+            "score": rate_clip(frames, compiler_cfg),
+        }
+        cache[str(video_id)] = entry
+        looked += 1
+        logger.info(
+            f"look {index + 1}/{len(picked)} [{entry['score']}/4"
+            f"{' / captioned' if entry['text'] else ''}]: "
+            f"{animal or '?'} -- {scene or '(none)'}"
+        )
+    if looked:
+        _save(cache_path, cache)
+        # leaving this one resident while the text model loads puts the machine into swap,
+        # and a one-second call takes fifteen minutes
+        unload(compiler_cfg.vision_model, compiler_cfg)
+
     clips: list[Clip] = []
-    fresh = 0
-    for index, (video_id, file_path, category, tags, duration_s, first_ts) in enumerate(picked):
-        cached = cache.get(str(video_id))
-        # the burned-text question reads the frame, so a cache written before it existed
-        # costs another look -- once per clip, then it is in the file like the rest
-        looked = cached is None or "text" not in cached
-        if looked:
-            start = _segment_start(duration_s, first_ts, compiler_cfg.segment_seconds)
-            frame = render.grab_frame(
-                Path(file_path), work_dir / f"look_{index}.jpg",
-                start + compiler_cfg.segment_seconds / 2,
-            )
-        if cached is None:
-            animal, scene = describe_frame(frame, compiler_cfg)
-            cached = {"animal": animal, "scene": scene}
-            cache[str(video_id)] = cached
-        if "text" not in cached:
-            cached["text"] = has_text(frame, compiler_cfg)
-        # both labels read the description, not the frame: a cache written before the
-        # second axis existed only needs the cheap text call, not another look
-        missing = [key for key in ("tag", "prop") if key not in cached]
+    labelled = 0
+    for index, (video_id, _, category, tags, _, _) in enumerate(picked):
+        entry = cache[str(video_id)]
+        # both labels read the description, not the frames: a cache written before a label
+        # existed is filled in by the cheap text call, without another look
+        missing = [key for key in ("tag", "prop") if key not in entry]
         for key, label in (("tag", tag_clip), ("prop", tag_prop)):
             if key in missing:
-                cached[key] = label(cached.get("scene", ""), compiler_cfg)
-        if missing or looked:
-            fresh += 1
+                entry[key] = label(entry.get("scene", ""), compiler_cfg)
+        if missing:
+            labelled += 1
             logger.info(
-                f"vision {index + 1}/{len(picked)} [{cached['tag']} / {cached['prop']}"
-                f"{' / captioned' if cached['text'] else ''}]: "
-                f"{cached.get('animal') or '?'} -- {cached.get('scene') or '(none)'}"
+                f"label {index + 1}/{len(picked)} [{entry['tag']} / {entry['prop']}]: "
+                f"{entry.get('scene') or '(none)'}"
             )
         clips.append(Clip(
             video_id=video_id, category=category, tags=tags,
-            seen=cached.get("scene", ""), animal=cached.get("animal", ""),
-            tag=cached.get("tag", ""), prop=cached.get("prop", ""),
-            text=bool(cached.get("text")),
+            seen=entry.get("scene", ""), animal=entry.get("animal", ""),
+            tag=entry.get("tag", ""), prop=entry.get("prop", ""),
+            text=bool(entry.get("text")), score=int(entry.get("score", 0)),
         ))
 
-    if fresh:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(cache, indent=1))
-        # the two models are ~6 GB each: leaving this one resident while the text model
-        # loads puts the machine into swap, and a one-second call takes fifteen minutes
-        unload(compiler_cfg.vision_model, compiler_cfg)
+    if labelled:
+        _save(cache_path, cache)
     return clips
 
 

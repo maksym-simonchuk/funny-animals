@@ -40,16 +40,48 @@ _SYSTEM = (
 )
 
 _LOOK = (
-    "Look at this video frame and answer with two fields. \"animal\" is what the animal is, "
-    "one or two words, the breed if you can tell it. \"scene\" is one short factual clause "
-    "about what it wears or holds, what it is doing, where it is -- and in that clause you "
-    "call it \"the animal\", never naming it. No opinions, no invented details."
+    "These are three frames of one short video clip, in the order they happen. Answer with "
+    "two fields. \"animal\" is what the animal is, one or two words, the breed if you can "
+    "tell it. \"scene\" is one short factual clause about what the animal DOES across the "
+    "three -- what it grabs, where it goes, what changes between the first frame and the "
+    "last -- and in that clause you call it \"the animal\", never naming it. Describe the "
+    "movement, not the furniture: what is funny about a clip is what happens in it, and "
+    "\"the animal is lying on a bed\" is true of a clip nobody would watch. No opinions, "
+    "no invented details."
 )
 _LOOK_SCHEMA = {
     "type": "object",
     "properties": {"animal": {"type": "string"}, "scene": {"type": "string"}},
     "required": ["animal", "scene"],
 }
+
+# the three questions worth asking of a clip that is about to cost a fifth of a short.
+# Yes/no, not "rate this 1 to 5": asked for a number the model answers 3 or 4 about
+# everything, and a score that never varies sorts nothing
+_RATE = (
+    "These are three frames of one short animal video, in the order they happen. Answer "
+    "three yes/no questions about it, going only on what you can see.\n"
+    "\"funny\": does something silly or unexpected happen -- the animal is caught at "
+    "something it should not be doing, ends up somewhere it does not fit, reacts to "
+    "something, or moves in a way that plainly did not go to plan? An animal that just "
+    "sits, lies or stands there through all three frames is \"no\", however pretty it is.\n"
+    "\"human\": is it doing something a person does -- wearing clothes, standing or "
+    "sitting upright, holding a thing in its paws like hands, using furniture, a cup or a "
+    "screen?\n"
+    "\"cute\": is it a baby, or tiny, or fluffy, or curled up against someone -- and close "
+    "enough to the camera that its face carries the shot?"
+)
+_RATE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        name: {"type": "string", "enum": ["yes", "no"]} for name in ("funny", "human", "cute")
+    },
+    "required": ["funny", "human", "cute"],
+}
+# funny counts double: this is a compilation of funny animals, and a cute clip where
+# nothing happens is what the ranking rows have nothing to joke about
+_WEIGHTS = {"funny": 2, "human": 1, "cute": 1}
+_UNRATED = 2  # the middle of 0..4: a clip the model never saw is neither pushed nor buried
 
 # the enum is the decoding grammar: an answer other than these two is impossible
 _YES_NO = {
@@ -58,11 +90,20 @@ _YES_NO = {
     "required": ["answer"],
 }
 
+# One label per clip, so the list is what a compilation can be about. It was twenty, and
+# on a pool of 208 clips twenty labels left 43 of them at "other" while the fullest bucket
+# was "watching something" -- 27 clips of an animal looking at a thing, which is the
+# dullest short this pipeline can build. The ones added since all name something that
+# HAPPENS: the vision pass now reads three frames, so movement is finally visible to it
 _TAGS = [
     "stealing food", "eating", "drinking", "sleeping", "wearing clothes", "in water",
     "climbing", "falling over", "yelling", "riding something", "playing with a toy",
     "getting a bath", "begging for food", "standing on hind legs", "chasing", "hiding",
     "watching something", "being held", "escaping", "making a mess",
+    "running around wildly", "jumping", "stuck somewhere", "startled",
+    "staring at the camera", "cuddling", "carrying something big", "refusing to move",
+    "dancing", "sitting like a person", "demanding attention", "yawning or stretching",
+    "rolling around", "licking something",
 ]
 
 # what each tag reads as over the ranking when the model cannot beat it: three tries at
@@ -85,6 +126,16 @@ _HEADINGS = {
     "clothes": "Fashion Victims", "water": "Pool Party Regulars", "a bed": "Bed Hogs",
     "a toy": "Toy Destroyers", "furniture": "Furniture Wreckers", "a car": "Backseat Drivers",
     "snow": "Snow Goblins", "another animal": "Odd Couples", "a baby": "Tiny Babysitters",
+    "running around wildly": "Zoomie Athletes", "jumping": "Airborne Acrobats",
+    "stuck somewhere": "Trapped Explorers", "startled": "Jump Scare Victims",
+    "staring at the camera": "Unblinking Judges", "cuddling": "Cuddle Addicts",
+    "carrying something big": "Overloaded Movers", "refusing to move": "Immovable Objects",
+    "dancing": "Dance Floor Kings", "sitting like a person": "Tiny Humans",
+    "demanding attention": "Attention Tyrants", "yawning or stretching": "Sleepy Stretchers",
+    "rolling around": "Rolling Disasters", "licking something": "Serial Lickers",
+    "a hat": "Hat Enthusiasts", "a blanket": "Blanket Burritos", "a ball": "Ball Obsessives",
+    "a shoe": "Shoe Thieves", "a bag": "Bag Inspectors", "a plant": "Plant Destroyers",
+    "a lap": "Lap Occupiers", "a door": "Door Negotiators",
 }
 
 # the wider net: several labels one heading can still say honestly. The key is the phrase
@@ -93,23 +144,40 @@ _HEADINGS = {
 # back on. Used only after single labels run dry -- "TOP 5 SNACK BANDITS" over five
 # thieves beats "TOP 5 FOOD CRIMINALS" over five animals merely near food
 _FAMILIES: dict[str, tuple[set[str], str]] = {
-    "sneaking or stealing": ({"stealing food", "hiding", "escaping"}, "Sneaky Operators"),
+    "sneaking or stealing": (
+        {"stealing food", "hiding", "escaping", "a shoe", "a bag"}, "Sneaky Operators"),
     "eating or drinking": (
         {"eating", "drinking", "stealing food", "begging for food", "fruit", "junk food",
-         "a drink"}, "Hungry Legends"),
+         "a drink", "licking something"}, "Hungry Legends"),
     # the phrase is what the gate reads, so it stays short: asked whether a clip fits
     # "acting like a person -- dressed up, standing upright, riding or watching a screen",
     # the model said yes to one clip in five and the family never filled
     "acting like a human": (
         {"wearing clothes", "standing on hind legs", "riding something", "clothes",
-         "a screen", "a mirror"}, "Human Impersonators"),
+         "a screen", "a mirror", "sitting like a person", "dancing", "a hat"},
+        "Human Impersonators"),
     "in or near water": ({"in water", "getting a bath", "water"}, "Splash Squad"),
     "asleep or lounging": (
-        {"sleeping", "a bed", "furniture", "being held"}, "Professional Loungers"),
+        {"sleeping", "a bed", "furniture", "being held", "yawning or stretching",
+         "a blanket", "a lap"}, "Professional Loungers"),
     "causing chaos": (
-        {"making a mess", "falling over", "chasing", "yelling"}, "Chaos Machines"),
+        {"making a mess", "falling over", "chasing", "yelling", "running around wildly",
+         "jumping", "rolling around", "a plant"}, "Chaos Machines"),
     "a toy or a box in the frame": (
-        {"playing with a toy", "a toy", "a box"}, "Playtime Professionals"),
+        {"playing with a toy", "a toy", "a box", "a ball"}, "Playtime Professionals"),
+    # the families the new labels bring with them. Each one is still a phrase every
+    # candidate is asked about, so a clip cannot ride in on a member label alone
+    "cuddling up to someone": (
+        {"cuddling", "being held", "a lap", "a baby"}, "Professional Snugglers"),
+    "startled or stuck": (
+        {"startled", "stuck somewhere", "falling over", "a door"}, "Trouble Magnets"),
+    "asking a person for something": (
+        {"demanding attention", "begging for food", "refusing to move"}, "Tiny Dictators"),
+    "moving fast": (
+        {"running around wildly", "jumping", "chasing", "dancing"}, "Speed Demons"),
+    "staring at something": (
+        {"staring at the camera", "watching something", "a mirror", "a screen"},
+        "Professional Observers"),
 }
 
 _TAG = (
@@ -138,6 +206,7 @@ _LINE = (
 _PROPS = [
     "fruit", "junk food", "a drink", "a box", "a mirror", "a screen", "clothes", "water",
     "a bed", "a toy", "furniture", "a car", "snow", "another animal", "a baby",
+    "a hat", "a blanket", "a ball", "a shoe", "a bag", "a plant", "a lap", "a door",
 ]
 
 _PROP = (
@@ -198,6 +267,7 @@ class Clip:
     tag: str = ""  # one of _TAGS: what the clip is of, the thing a compilation groups on
     prop: str = ""  # one of _PROPS: what is in frame with it, the other thing to group on
     text: bool = False  # the clip carries its own burned-in caption, so ours collides
+    score: int = 0  # 0..4, `rate_clip`: how much of a reason to watch this one is
 
 
 @dataclass(frozen=True)
@@ -331,11 +401,21 @@ def unload(model: str, cfg: "CompilerCfg") -> None:
         logger.debug(f"could not unload {model}: {exc}")
 
 
-def describe_frame(frame: Path, cfg: "CompilerCfg") -> tuple[str, str]:
-    """What the local vision model sees in `frame`, as (animal, scene).
+def _images(frames: list[Path]) -> list[str]:
+    return [base64.b64encode(frame.read_bytes()).decode("ascii") for frame in frames]
 
-    The two are kept apart on purpose. The scene leaves the animal unnamed, because the
-    text model that writes the ranking opens every row with the species it is given
+
+def describe_frames(frames: list[Path], cfg: "CompilerCfg") -> tuple[str, str]:
+    """What the local vision model sees across `frames` of one clip, as (animal, scene).
+
+    Three frames, not one. A single still of the middle of a segment cannot tell a dog
+    mid-zoomies from a dog standing there, so every description came back as furniture --
+    "the animal is lying on a bed with a plaid blanket" -- and a ranking row joking about
+    that is a row about nothing. What is funny about a clip is what changes in it, and
+    with three frames in order the model can finally say what that is.
+
+    The two fields are kept apart on purpose. The scene leaves the animal unnamed, because
+    the text model that writes the ranking opens every row with the species it is given
     ("CHIHUAHUA STRAWBERRY THIEF") however plainly the prompt forbids it. The name still
     has to exist, though: without it the heading comes out as "TOP 5 SWEET THIEVES",
     true of nothing in particular, when it should say which animals are in the set.
@@ -343,7 +423,7 @@ def describe_frame(frame: Path, cfg: "CompilerCfg") -> tuple[str, str]:
     Returns ("", "") when vision is switched off or the model is missing: the plan then
     falls back to the database metadata, which is category and tags and nothing else.
     """
-    if not cfg.vision_model:
+    if not cfg.vision_model or not frames:
         return "", ""
 
     payload = {
@@ -352,11 +432,7 @@ def describe_frame(frame: Path, cfg: "CompilerCfg") -> tuple[str, str]:
         "think": False,
         "format": _LOOK_SCHEMA,
         "options": {"temperature": 0.2},
-        "messages": [{
-            "role": "user",
-            "content": _LOOK,
-            "images": [base64.b64encode(frame.read_bytes()).decode("ascii")],
-        }],
+        "messages": [{"role": "user", "content": _LOOK, "images": _images(frames)}],
     }
     try:
         body = _chat(payload, cfg)
@@ -369,24 +445,67 @@ def describe_frame(frame: Path, cfg: "CompilerCfg") -> tuple[str, str]:
     return animal, " ".join(str(data.get("scene") or "").split())[:200]
 
 
-_TEXT = ("Look at the picture. Is there ANY text or logo burned into it -- a caption, a "
-         "title, a subtitle, a numbered list, a username or @handle, a platform watermark "
-         "such as TikTok or Instagram, an app or studio name in a corner? Look in all four "
-         "corners and along both edges, however small or faint it is. Answer yes or no.")
+def rate_clip(frames: list[Path], cfg: "CompilerCfg") -> int:
+    """How much of a reason to watch this clip is, 0 to 4.
+
+    Nothing used to rate the clips at all: a compilation was the first five clips of the
+    fullest bucket in database order, so whether it was funny came down to what the
+    scraper happened to download last. The label says what a clip is ABOUT, and that is
+    the one thing a heading can be true of -- it says nothing about whether the clip is
+    worth eight seconds of a viewer's attention.
+
+    Three yes/no answers, weighted: an unexpected turn counts double, acting like a person
+    and being outright cute count once each. Enum-constrained like every other gate here,
+    because asked to "rate this out of five" the model answers three or four about
+    everything and the ranking it produces sorts nothing.
+
+    Returns `_UNRATED` when vision is off or down -- with no clip rated, the order is the
+    one it always was, and a single clip the model failed on lands mid-pack instead of
+    being buried under everything it never saw.
+    """
+    if not cfg.vision_model or not frames:
+        return _UNRATED
+
+    payload = {
+        "model": cfg.vision_model,
+        "stream": False,
+        "think": False,
+        "format": _RATE_SCHEMA,
+        "options": {"temperature": 0.0},  # a verdict, not a joke: same clip, same answer
+        "messages": [{"role": "user", "content": _RATE, "images": _images(frames)}],
+    }
+    try:
+        body = _chat(payload, cfg)
+        answers = json.loads((body.get("message") or {}).get("content") or "{}")
+    except (PlanError, json.JSONDecodeError) as exc:
+        logger.warning(f"rating unavailable ({exc}); the clip is neither pushed nor buried")
+        return _UNRATED
+    return sum(weight for name, weight in _WEIGHTS.items() if answers.get(name) == "yes")
 
 
-def has_text(frame: Path, cfg: "CompilerCfg") -> bool:
+_TEXT = ("These pictures are frames of one video clip. Is there ANY text or logo burned "
+         "into ANY of them -- a caption, a title, a subtitle, a numbered list, a username "
+         "or @handle, a platform watermark such as TikTok or Instagram, an app or studio "
+         "name in a corner? Look in all four corners and along both edges of each, however "
+         "small or faint it is. Answer yes or no.")
+
+
+def has_text(frames: list[Path], cfg: "CompilerCfg") -> bool:
     """Does the clip carry burned-in text or someone else's watermark?
 
     A reel that came with a "Top 10 Funniest Cats" list burned into the picture puts two
     rankings on the screen at once and reads as broken.
+
+    Every frame of the look goes in, in one question: a caption that fades in halfway
+    through the segment is not in the middle frame, and one still is all this gate used
+    to see.
 
     The question used to end with "a small username, logo or channel handle does not
     count", and that sentence is what let a TikTok watermark and a "Dola AI" corner mark
     into a finished short. TikTok suppresses reach on video wearing another platform's
     mark, so now anything burned in counts, however small.
     """
-    if not cfg.vision_model:
+    if not cfg.vision_model or not frames:
         return False
 
     payload = {
@@ -395,11 +514,7 @@ def has_text(frame: Path, cfg: "CompilerCfg") -> bool:
         "think": False,
         "format": _YES_NO,
         "options": {"temperature": 0.0},
-        "messages": [{
-            "role": "user",
-            "content": _TEXT,
-            "images": [base64.b64encode(frame.read_bytes()).decode("ascii")],
-        }],
+        "messages": [{"role": "user", "content": _TEXT, "images": _images(frames)}],
     }
     try:
         body = _chat(payload, cfg)
@@ -553,8 +668,11 @@ def group_clips(clips: list[Clip], size: int, cfg: "CompilerCfg",
     clip in it by construction -- asking the model to both pick the five and name what
     they share put clips in it that only half fitted.
 
-    The fullest bucket goes first. Across a batch that keeps the themes moving: each short
-    empties the bucket it used, and the next short has to look elsewhere.
+    The best bucket goes first -- the one whose top `size` clips the vision pass rated
+    highest, not simply the one with the most clips in it. Across a batch that keeps the
+    themes moving: each short empties the bucket it used, and the next has to look
+    elsewhere. Inside the short the clips are ordered best first, so the ranking opens on
+    the strongest one.
 
     ``done`` is read and extended in place: a label a short in this batch already used is
     skipped even when it still has clips, or the pool's biggest bucket names two shorts in
@@ -613,9 +731,12 @@ def group_clips(clips: list[Clip], size: int, cfg: "CompilerCfg",
             logger.info(f"theme: {tag} (again) -- clips {[i + 1 for i in picked]}")
             return picked, name_theme(tag, [clips[i] for i in picked], size, cfg, done=done)
     if not picked:
-        # nothing groupable left -- an honest generic heading beats a themed lie
-        logger.info(f"nothing has {size} clips left to share; falling back to the newest ones")
-        return list(range(min(size, len(clips)))), "Funny Animals"
+        # nothing groupable left -- an honest generic heading beats a themed lie. With no
+        # theme to be true to, the only thing left to choose on is which clips are worth
+        # watching, so the rating picks all five
+        logger.info(f"nothing has {size} clips left to share; taking the best-rated clips")
+        best = sorted(range(len(clips)), key=lambda index: -clips[index].score)
+        return best[:size], "Funny Animals"
 
     logger.info(f"theme: {tag} -- clips {[index + 1 for index in picked]}")
     done.add(tag)
@@ -624,18 +745,34 @@ def group_clips(clips: list[Clip], size: int, cfg: "CompilerCfg",
 
 def _fullest(clips: list[Clip], buckets: dict[str, list[int]], size: int,
              cfg: "CompilerCfg", done: set[str]) -> tuple[str, list[int]]:
-    """The fullest bucket that can fill a short, as (label, indices), or ("", []).
+    """The best bucket that can fill a short, as (label, indices), or ("", []).
+
+    Best, not fullest. Ranked by size alone, a bucket of twenty-seven clips of an animal
+    looking at something beat a bucket of six clips of animals losing a fight with a
+    blanket, and the short built off it was five animals sitting still under a heading
+    that promised a countdown. A bucket is now worth what its best `size` clips are worth
+    (`rate_clip`), and how many clips it holds only breaks the tie.
+
+    Inside the bucket the same order decides who gets in: the highest-rated clips are
+    offered first, so a short is the best five the theme has rather than the five the
+    scraper happened to download last. The picked indices come back in that order too --
+    the best clip opens the short, where a viewer decides in one second whether to stay.
 
     Every candidate is read back to the model before it goes in: the label came out of
     one shot at temperature 0, and a bucket that cannot fill honestly is skipped for the
     next one down. Labels in `done` are skipped whole: another short of this batch is
     already named after them.
     """
-    for label, found in sorted(buckets.items(), key=lambda item: -len(item[1])):
+    def worth(found: list[int]) -> tuple[int, int]:
+        best = sorted((clips[index].score for index in found), reverse=True)[:size]
+        return sum(best), len(found)
+
+    for label, found in sorted(buckets.items(), key=lambda item: worth(item[1]), reverse=True):
         if len(found) < size or label in done:
             continue
         picked: list[int] = []
-        for index in found:
+        # stable, so clips the model rated the same stay in pool order -- the newest first
+        for index in sorted(found, key=lambda index: -clips[index].score):
             if fits_tag(clips[index].seen, label, cfg):
                 picked.append(index)
                 if len(picked) == size:

@@ -58,8 +58,9 @@ processing:
 compiler:
   # Local Ollama, nothing leaves the machine: `ollama serve` + `ollama pull qwen3:8b`.
   model: qwen3:8b
-  # Vision pass: looks at one frame per clip so the captions describe what is really
-  # there. "" turns it off. Pull it with: ollama pull qwen2.5vl:7b
+  # Vision pass: looks at three frames per clip (10/50/90 % of the segment) so the
+  # captions describe what really happens, not what the room looks like. Also rates the
+  # clip funny/human/cute. "" turns it off. Pull it with: ollama pull qwen2.5vl:7b
   vision_model: qwen2.5vl:7b
   host: http://127.0.0.1:11434
   temperature: 0.8

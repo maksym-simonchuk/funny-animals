@@ -140,37 +140,73 @@ def test_make_plan_reports_an_unreachable_ollama(tmp_cfg, monkeypatch) -> None:
 # --- vision ------------------------------------------------------------------------
 
 
-def test_describe_frame_sends_the_image_and_returns_one_line(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
-    frame = render.grab_frame(_make_video(tmp_path / "c.mp4", duration=1), tmp_path / "look.jpg", 0.5)
+def test_describe_frames_sends_every_frame_and_returns_one_line(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
+    clip = _make_video(tmp_path / "c.mp4", duration=1)
+    frames = [render.grab_frame(clip, tmp_path / f"look{n}.jpg", at)
+              for n, at in enumerate((0.1, 0.5, 0.9))]
     cfg = replace(tmp_cfg.compiler, vision_model="qwen2.5vl:7b")
     sent: list[dict] = []
 
     def fake_urlopen(request, timeout=None):
         sent.append(json.loads(request.data))
-        reply = {"animal": "chihuahua", "scene": " the animal\n wears a hat "}
+        reply = {"animal": "chihuahua", "scene": " the animal\n grabs a hat "}
         return io.BytesIO(json.dumps({"message": {"content": json.dumps(reply)}}).encode())
 
     monkeypatch.setattr(plan_mod.urllib.request, "urlopen", fake_urlopen)
 
-    assert plan_mod.describe_frame(frame, cfg) == ("chihuahua", "the animal wears a hat")
+    assert plan_mod.describe_frames(frames, cfg) == ("chihuahua", "the animal grabs a hat")
     assert sent[0]["model"] == "qwen2.5vl:7b"
-    assert sent[0]["messages"][0]["images"]  # base64 of the jpeg travelled with it
+    # all three travel in one question: one still cannot tell movement from furniture
+    assert len(sent[0]["messages"][0]["images"]) == 3
     # the species stays out of it, or the text model opens every row with it
     assert "never naming it" in sent[0]["messages"][0]["content"]
 
 
-def test_describe_frame_falls_back_quietly_when_vision_is_off_or_down(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
+def test_describe_frames_falls_back_quietly_when_vision_is_off_or_down(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
     frame = tmp_path / "look.jpg"
     frame.write_bytes(b"not really a jpeg")
 
-    assert plan_mod.describe_frame(frame, tmp_cfg.compiler) == ("", "")  # vision_model="" in tests
+    assert plan_mod.describe_frames([frame], tmp_cfg.compiler) == ("", "")  # vision_model=""
 
     def refuse(request, timeout=None):
         raise OSError("connection refused")
 
     monkeypatch.setattr(plan_mod.urllib.request, "urlopen", refuse)
     # a missing vision model must not sink the whole compilation
-    assert plan_mod.describe_frame(frame, replace(tmp_cfg.compiler, vision_model="x")) == ("", "")
+    assert plan_mod.describe_frames([frame], replace(tmp_cfg.compiler, vision_model="x")) == ("", "")
+
+
+def test_rate_clip_weighs_an_unexpected_turn_double(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
+    """Nothing used to rate the clips: a short was the first five of the fullest bucket in
+    database order, so whether it was funny was down to what the scraper downloaded last."""
+    frame = tmp_path / "look.jpg"
+    frame.write_bytes(b"not really a jpeg")
+    cfg = replace(tmp_cfg.compiler, vision_model="qwen2.5vl:7b")
+
+    sent = _stub_ollama(monkeypatch, {"funny": "yes", "human": "no", "cute": "yes"})
+    assert plan_mod.rate_clip([frame, frame], cfg) == 3
+    # yes/no, not "rate this 1 to 5": asked for a number the model says 3 about everything
+    assert sent[0]["format"]["properties"]["funny"]["enum"] == ["yes", "no"]
+
+    _stub_ollama(monkeypatch, {"funny": "no", "human": "yes", "cute": "yes"})
+    assert plan_mod.rate_clip([frame], cfg) == 2  # cute and human-like still lose to funny
+
+    _stub_ollama(monkeypatch, {"funny": "no", "human": "no", "cute": "no"})
+    assert plan_mod.rate_clip([frame], cfg) == 0
+
+
+def test_rate_clip_puts_a_clip_it_could_not_see_mid_pack(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
+    frame = tmp_path / "look.jpg"
+    frame.write_bytes(b"not really a jpeg")
+
+    assert plan_mod.rate_clip([frame], tmp_cfg.compiler) == plan_mod._UNRATED  # vision off
+
+    def refuse(request, timeout=None):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(plan_mod.urllib.request, "urlopen", refuse)
+    # buried at 0, one failed call would cost a clip the short it belonged in
+    assert plan_mod.rate_clip([frame], replace(tmp_cfg.compiler, vision_model="x")) == 2
 
 
 def test_heading_holds_asks_one_clip_at_a_time(tmp_cfg, monkeypatch) -> None:
@@ -208,12 +244,16 @@ def test_recall_carries_spent_clips_and_themes_between_runs(tmp_cfg) -> None:
 
 
 def test_has_text_asks_vision_and_stays_quiet_when_it_is_down(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
-    frame = render.grab_frame(_make_video(tmp_path / "c.mp4", duration=1), tmp_path / "look.jpg", 0.5)
+    clip = _make_video(tmp_path / "c.mp4", duration=1)
+    frames = [render.grab_frame(clip, tmp_path / f"look{n}.jpg", at)
+              for n, at in enumerate((0.1, 0.5, 0.9))]
+    frame = frames[0]
     cfg = replace(tmp_cfg.compiler, vision_model="qwen2.5vl:7b")
     sent = _stub_ollama(monkeypatch, {"answer": "yes"})
 
-    assert plan_mod.has_text(frame, cfg) is True
-    assert sent[0]["messages"][0]["images"]
+    assert plan_mod.has_text(frames, cfg) is True
+    # every frame of the look, not just the middle one: a caption can fade in halfway
+    assert len(sent[0]["messages"][0]["images"]) == 3
     # the question used to wave small handles through, and a TikTok watermark reached a
     # finished short that way -- TikTok suppresses reach on another platform's mark
     assert "username" in sent[0]["messages"][0]["content"]
@@ -223,7 +263,7 @@ def test_has_text_asks_vision_and_stays_quiet_when_it_is_down(tmp_cfg, tmp_path:
         raise OSError("connection refused")
 
     monkeypatch.setattr(plan_mod.urllib.request, "urlopen", refuse)
-    assert plan_mod.has_text(frame, cfg) is False  # vision down keeps the clip, not drops it
+    assert plan_mod.has_text([frame], cfg) is False  # vision down keeps the clip, not drops it
 
 
 def test_group_clips_takes_the_fullest_bucket_and_strips_the_top_prefix(monkeypatch, tmp_cfg) -> None:
@@ -286,6 +326,38 @@ def test_group_clips_moves_on_to_a_theme_this_batch_has_not_used(monkeypatch, tm
     # with every label spoken for, a used one comes back rather than a generic heading;
     # the name is what has to differ, and `done` is what name_theme reads for that
     assert plan_mod.group_clips(clips, 2, tmp_cfg.compiler, done)[0] == [0, 1]
+
+
+def test_group_clips_takes_the_best_rated_clips_of_a_bucket_best_first(monkeypatch, tmp_cfg) -> None:
+    """The bucket used to be spent on whichever five clips the scraper downloaded last."""
+    monkeypatch.setattr(plan_mod, "fits_tag", lambda scene, label, cfg: True)
+    monkeypatch.setattr(plan_mod, "name_theme", lambda *args, **kwargs: "Snack Bandits")
+    clips = [
+        plan_mod.Clip(1, "dog", [], seen="one", tag="stealing food", score=1),
+        plan_mod.Clip(2, "dog", [], seen="two", tag="stealing food", score=4),
+        plan_mod.Clip(3, "dog", [], seen="three", tag="stealing food", score=0),
+        plan_mod.Clip(4, "dog", [], seen="four", tag="stealing food", score=3),
+    ]
+
+    # the two best, and the best of those opens the short
+    assert plan_mod.group_clips(clips, 2, tmp_cfg.compiler) == ([1, 3], "Snack Bandits")
+
+
+def test_group_clips_prefers_a_better_bucket_over_a_fuller_one(monkeypatch, tmp_cfg) -> None:
+    """27 clips of an animal looking at something outnumbered every other bucket in the
+    pool, and won every time on size alone -- five animals sitting still under a heading
+    that promised a countdown."""
+    monkeypatch.setattr(plan_mod, "fits_tag", lambda scene, label, cfg: True)
+    monkeypatch.setattr(plan_mod, "name_theme", lambda tag, *args, **kwargs: tag.title())
+    clips = [
+        plan_mod.Clip(1, "dog", [], seen="a", tag="watching something", score=1),
+        plan_mod.Clip(2, "dog", [], seen="b", tag="watching something", score=0),
+        plan_mod.Clip(3, "dog", [], seen="c", tag="watching something", score=1),
+        plan_mod.Clip(4, "dog", [], seen="d", tag="falling over", score=4),
+        plan_mod.Clip(5, "dog", [], seen="e", tag="falling over", score=4),
+    ]
+
+    assert plan_mod.group_clips(clips, 2, tmp_cfg.compiler) == ([3, 4], "Falling Over")
 
 
 def test_group_clips_stays_generic_when_no_tag_can_fill_a_short(tmp_cfg) -> None:
@@ -555,6 +627,47 @@ def test_join_crossfades_the_segments_and_mixes_the_music_bed(tmp_path: Path) ->
         check=True, capture_output=True,
     ).stdout.decode().split()
     assert "audio" in codecs and "video" in codecs
+
+
+def test_look_at_clips_looks_again_only_at_what_an_older_cache_wrote(tmp_cfg, tmp_path: Path, monkeypatch) -> None:
+    """A first look over a pool this size is the better part of an hour, so an entry the
+    current version wrote is never repeated -- and one written before the clips were rated
+    always is."""
+    import src.compiler as compiler_mod
+
+    clip = _make_video(tmp_path / "c.mp4", duration=6)
+    cache_path = tmp_cfg.compiler.output_path.parent / "vision.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text(json.dumps({
+        "7": {"animal": "dog", "scene": "the animal lies on a bed",  # v1: one frame, no score
+              "text": False, "tag": "sleeping", "prop": "a bed"},
+        "8": {"v": 2, "animal": "cat", "scene": "the animal jumps off a shelf",
+              "text": False, "score": 4, "tag": "jumping", "prop": "furniture"},
+    }))
+    looks: list[list[Path]] = []
+
+    def fake_describe(frames, cfg):
+        looks.append(frames)
+        return "dog", "the animal drags a sock off the sofa"
+
+    monkeypatch.setattr(compiler_mod, "describe_frames", fake_describe)
+    monkeypatch.setattr(compiler_mod, "has_text", lambda frames, cfg: False)
+    monkeypatch.setattr(compiler_mod, "rate_clip", lambda frames, cfg: 3)
+    monkeypatch.setattr(compiler_mod, "tag_clip", lambda scene, cfg: "stealing food")
+    monkeypatch.setattr(compiler_mod, "tag_prop", lambda scene, cfg: "a shoe")
+    monkeypatch.setattr(compiler_mod, "unload", lambda model, cfg: None)
+
+    picked = [(7, str(clip), "dog", [], 6.0, 0.0), (8, str(clip), "cat", [], 6.0, 0.0)]
+    clips = compiler_mod._look_at_clips(
+        picked, replace(tmp_cfg.compiler, vision_model="qwen2.5vl:7b"), tmp_path / "work"
+    )
+
+    assert len(looks) == 1  # the up-to-date entry is not looked at again
+    assert len(looks[0]) == 3  # and the stale one is shown three frames, not one
+    assert (clips[0].score, clips[0].seen) == (3, "the animal drags a sock off the sofa")
+    assert (clips[1].score, clips[1].tag) == (4, "jumping")
+    # the re-look is on disk before the labels run: an hour of inference is not redone
+    assert json.loads(cache_path.read_text())["7"]["score"] == 3
 
 
 # --- end to end --------------------------------------------------------------------

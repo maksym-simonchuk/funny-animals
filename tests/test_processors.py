@@ -344,7 +344,7 @@ def test_run_processing_rejects_a_clip_with_a_ranking_burned_into_it(
     src = tmp_path / "captioned.mp4"
     _make_video(src, duration=6, width=640, height=360)
     row = _insert_video(db, src)
-    monkeypatch.setattr(processors, "has_text", lambda frame, cfg: True)
+    monkeypatch.setattr(processors, "has_text", lambda frames, cfg: bool(frames))
 
     result = run_processing(tmp_cfg, detect_animals=False, check_quality=False)
 
@@ -362,7 +362,10 @@ def test_run_processing_rejects_a_watermark_that_only_shows_up_late(
     row = _insert_video(db, src)
     read: list[Path] = []
 
-    def only_the_last(frame: Path, cfg) -> bool:
+    def only_the_last(frames: list[Path], cfg) -> bool:
+        # unpacking, not frames[0]: the gate passes one frame per call, and a signature
+        # change on the real has_text has to fail here rather than in a night's processing run
+        (frame,) = frames
         read.append(frame)
         return frame == sorted(frame.parent.glob("frame_*.jpg"))[-1]
 

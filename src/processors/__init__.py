@@ -102,7 +102,7 @@ def _process_one(
     # first, middle and last let a "All I said was good morning..." caption on a 14s clip into
     # a finished short -- it sat on the frames in between. `any` stops at the first yes, so a
     # clip that is going to be rejected still costs one call; only clean clips pay per frame.
-    if any(has_text(frame, cfg.compiler) for frame in frame_paths):
+    if any(has_text([frame], cfg.compiler) for frame in frame_paths):
         row.status = VideoStatus.REJECTED
         row.reject_reason = "burned_text"
         return
