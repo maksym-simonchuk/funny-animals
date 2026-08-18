@@ -294,25 +294,49 @@ _COPY_SYSTEM = (
     "the reader want to see how it ends."
 )
 
+# The tags people actually search and follow, spelled the way they are typed there. The
+# model chooses from this list instead of inventing one: a coined tag like #PetVids is a
+# dead end -- no one browses it -- and camel case is not how anybody types a hashtag.
+_HASHTAGS = [
+    "shorts", "fyp", "foryou", "viral", "funny", "funnyvideos", "comedy", "lol",
+    "animals", "animalvideos", "funnyanimals", "cuteanimals", "animallovers", "wildlife",
+    "pets", "petsoftiktok", "cute", "dog", "dogs", "dogsoftiktok", "puppy",
+    "cat", "cats", "catsoftiktok", "kitten", "bird", "birds", "horse", "farmanimals",
+]
+
+# Every post opens on the tags that carry the reach and only then on the ones about this
+# particular video: asked for five the model returns three, and a short whose whole tag
+# line is #wildlife is a short the feed has nowhere to put
+_YT_ALWAYS = ("funnyanimals", "animals", "animalvideos")
+_TT_ALWAYS = ("fyp", "viral", "funnyanimals", "animals")
+_TAGS_MAX = 8
+
 # YouTube cuts a title off at 100 characters, and it is the searchable half of the copy
 _YT_TITLE_MAX = 100
+_TITLE_TAG = "#shorts"
+_HASHTAG = re.compile(r"\s*#\w+")
 
 
 def make_copy(clips: list[Clip], plan: Plan, cfg: "CompilerCfg") -> str:
     """The sidecar text that ships next to the .mp4: a YouTube title and description,
     then a clickbait TikTok caption. Raises PlanError on failure."""
+    title_max = _YT_TITLE_MAX - len(_TITLE_TAG) - 1  # the tag is appended, not written
     prompt = (
         f"Clips:\n{_describe(clips)}\n\n"
         f'The compilation is on screen as "TOP {len(clips)} {plan.category}".\n\n'
         f"Write:\n"
-        f"1. youtube_title -- under {_YT_TITLE_MAX} characters, says what the video is, "
-        f"ends with #Shorts.\n"
-        f"2. youtube_description -- two or three sentences on what is in it, then one "
-        f"line of five to eight hashtags.\n"
-        f"3. tiktok_caption -- two lines at most. Open on the single funniest clip "
-        f"without giving away how it ends, then a line of three to six hashtags. "
-        f"Emoji are fine here and nowhere else."
+        f"1. youtube_title -- under {title_max} characters, says what the video is.\n"
+        f"2. youtube_description -- two or three sentences on what is in it.\n"
+        f"3. tiktok_caption -- one line. Open on the single funniest clip without "
+        f"giving away how it ends. Emoji are fine here and nowhere else.\n"
+        f"4. youtube_tags -- five to eight of the listed tags, the ones somebody "
+        f"looking for this video would search.\n"
+        f"5. tiktok_tags -- three to six of them, the ones this video is scrolled past "
+        f"under.\n"
+        f"No hashtags inside the title, the description or the caption -- the tags are "
+        f"the two lists and nothing else."
     )
+    tags = {"type": "array", "items": {"type": "string", "enum": _HASHTAGS}}
     payload = {
         "model": cfg.model,
         "stream": False,
@@ -323,8 +347,13 @@ def make_copy(clips: list[Clip], plan: Plan, cfg: "CompilerCfg") -> str:
                 "youtube_title": {"type": "string"},
                 "youtube_description": {"type": "string"},
                 "tiktok_caption": {"type": "string"},
+                "youtube_tags": {**tags, "minItems": 5, "maxItems": 8},
+                "tiktok_tags": {**tags, "minItems": 3, "maxItems": 6},
             },
-            "required": ["youtube_title", "youtube_description", "tiktok_caption"],
+            "required": [
+                "youtube_title", "youtube_description", "tiktok_caption",
+                "youtube_tags", "tiktok_tags",
+            ],
         },
         "options": {"temperature": cfg.temperature},
         "messages": [
@@ -339,22 +368,41 @@ def make_copy(clips: list[Clip], plan: Plan, cfg: "CompilerCfg") -> str:
             data = json.loads((body.get("message") or {}).get("content") or "")
         except json.JSONDecodeError as exc:
             raise PlanError(f"the model did not answer with JSON: {exc}") from exc
-        title = " ".join(str(data.get("youtube_title", "")).split())
-        if len(title) <= _YT_TITLE_MAX:
+        title = _untagged(str(data.get("youtube_title", "")))
+        if len(title) <= title_max:
             break
         # one more try, then the truncation: a title cut mid-word is worse than a short one
         logger.info(f"youtube title is {len(title)} characters, asking again")
         if attempt:
-            title = _clip_words(title, _YT_TITLE_MAX)
+            title = _clip_words(title, title_max)
 
     if not title:
         raise PlanError("the model returned an empty youtube title")
-    description = str(data.get("youtube_description", "")).strip()
-    tiktok = str(data.get("tiktok_caption", "")).strip()
+    description = _untagged(data.get("youtube_description", ""))
+    tiktok = _untagged(data.get("tiktok_caption", ""))
+    # #shorts is what makes YouTube treat the upload as a Short, so it is not the model's
+    # to leave out: the title carries it whatever the tag lines say
     return (
-        f"YOUTUBE SHORTS\n{title}\n\n{description}\n\n"
-        f"TIKTOK\n{tiktok}\n"
+        f"YOUTUBE SHORTS\n{title} {_TITLE_TAG}\n\n{description}\n"
+        f"{_tag_line(_YT_ALWAYS, data.get('youtube_tags'))}\n\n"
+        f"TIKTOK\n{tiktok}\n{_tag_line(_TT_ALWAYS, data.get('tiktok_tags'))}\n"
     )
+
+
+def _untagged(text: object) -> str:
+    """`text` with its whitespace collapsed per line and any hashtags stripped out: the
+    tag lines are built from the two lists, so a tag in the prose is only a duplicate."""
+    lines = (" ".join(_HASHTAG.sub("", line).split()) for line in str(text).splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+def _tag_line(*groups: object) -> str:
+    """One line of hashtags, the groups in the order given, without repeats, without
+    anything off the list and without the #shorts the title already carries."""
+    flat = [value for group in groups if isinstance(group, (list, tuple)) for value in group]
+    seen = dict.fromkeys(str(value).lower().lstrip("#") for value in flat)
+    keep = [tag for tag in seen if tag in _HASHTAGS and f"#{tag}" != _TITLE_TAG]
+    return " ".join(f"#{tag}" for tag in keep[:_TAGS_MAX])
 
 
 def _clip_words(text: str, limit: int) -> str:

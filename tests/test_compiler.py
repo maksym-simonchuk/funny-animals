@@ -675,9 +675,11 @@ def test_look_at_clips_looks_again_only_at_what_an_older_cache_wrote(tmp_cfg, tm
 
 def test_make_copy_lays_out_both_platforms(tmp_cfg, monkeypatch) -> None:
     _stub_ollama(monkeypatch, {
-        "youtube_title": "Top 5 Tall Boys #Shorts",
-        "youtube_description": "Five animals on their hind legs.\n#animals #shorts",
-        "tiktok_caption": "The alpaca refuses to move 😭\n#fyp #animals",
+        "youtube_title": "Top 5 Tall Boys",
+        "youtube_description": "Five animals on their hind legs.",
+        "tiktok_caption": "The alpaca refuses to move 😭",
+        "youtube_tags": ["funnyanimals", "cuteanimals", "pets"],
+        "tiktok_tags": ["fyp", "funny"],
     })
     clips = [plan_mod.Clip(1, "dog", [], seen="the animal stands on its hind legs")]
     plan = plan_mod.Plan(category="Tall Boys", title="Tall Boys", hook="", captions=[], lines=[])
@@ -685,10 +687,33 @@ def test_make_copy_lays_out_both_platforms(tmp_cfg, monkeypatch) -> None:
     text = plan_mod.make_copy(clips, plan, tmp_cfg.compiler)
 
     assert text.splitlines()[0] == "YOUTUBE SHORTS"
-    assert "Top 5 Tall Boys #Shorts" in text
+    assert "Top 5 Tall Boys #shorts" in text
+    # the reach tags lead, what the model picked for this video follows
+    assert "#funnyanimals #animals #animalvideos #cuteanimals #pets\n" in text
     # the TikTok half comes second, and the two are not the same copy twice
     assert text.index("TIKTOK") > text.index("Top 5 Tall Boys")
     assert "The alpaca refuses to move" in text
+    assert text.rstrip().endswith("#fyp #viral #funnyanimals #animals #funny")
+
+
+def test_make_copy_keeps_only_lowercase_tags_off_the_list(tmp_cfg, monkeypatch) -> None:
+    _stub_ollama(monkeypatch, {
+        "youtube_title": "Top 5 Tall Boys #Shorts",
+        "youtube_description": "Five animals on their hind legs. #PetVids",
+        "tiktok_caption": "The alpaca refuses to move #TallBoys",
+        "youtube_tags": ["Funnyanimals", "#pets", "PetVids", "shorts", "pets"],
+        "tiktok_tags": ["fyp"],
+    })
+    plan = plan_mod.Plan(category="Tall Boys", title="Tall Boys", hook="", captions=[], lines=[])
+
+    text = plan_mod.make_copy([plan_mod.Clip(1, "dog", [])], plan, tmp_cfg.compiler)
+
+    # invented tags are dropped, casing is flattened, the title's #shorts is not repeated,
+    # and a tag written into the prose is not left there next to the tag line
+    assert "#funnyanimals #animals #animalvideos #pets\n" in text
+    assert "#PetVids" not in text and "#TallBoys" not in text
+    assert text.count("#shorts") == 1
+    assert text.splitlines()[1] == "Top 5 Tall Boys #shorts"
 
 
 def test_make_copy_trims_a_youtube_title_over_the_limit(tmp_cfg, monkeypatch) -> None:
@@ -696,6 +721,7 @@ def test_make_copy_trims_a_youtube_title_over_the_limit(tmp_cfg, monkeypatch) ->
     sent = _stub_ollama(monkeypatch, {
         "youtube_title": long_title,
         "youtube_description": "d", "tiktok_caption": "t",
+        "youtube_tags": ["pets"], "tiktok_tags": ["fyp"],
     })
     plan = plan_mod.Plan(category="Tall Boys", title="Tall Boys", hook="", captions=[], lines=[])
 
@@ -710,9 +736,10 @@ def test_build_short_writes_the_copy_next_to_the_mp4(db, tmp_cfg, tmp_path: Path
     _stub_ollama(monkeypatch, {
         "category": "Paws", "title": "Dogs Go Wild", "hook": "Watch this",
         "captions": ["one", "two"],
-        "youtube_title": "Top 5 Dogs Going Wild #Shorts",
-        "youtube_description": "Five dogs, one couch.\n#dogs #shorts",
-        "tiktok_caption": "Number 1 broke me 😭\n#fyp",
+        "youtube_title": "Top 5 Dogs Going Wild",
+        "youtube_description": "Five dogs, one couch.",
+        "tiktok_caption": "Number 1 broke me 😭",
+        "youtube_tags": ["dogs", "funnyanimals", "pets"], "tiktok_tags": ["fyp"],
     })
     for index in range(2):
         _insert_clip(_make_video(tmp_path / f"clip{index}.mp4", duration=6), f"v{index}", first_ts=1.0)
@@ -721,7 +748,7 @@ def test_build_short_writes_the_copy_next_to_the_mp4(db, tmp_cfg, tmp_path: Path
 
     copy = out.with_suffix(".txt")
     assert copy.is_file()
-    assert "Top 5 Dogs Going Wild #Shorts" in copy.read_text()
+    assert "Top 5 Dogs Going Wild #shorts" in copy.read_text()
     assert "TIKTOK" in copy.read_text()
 
 
