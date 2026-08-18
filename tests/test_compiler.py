@@ -712,6 +712,31 @@ def test_build_short_batch_does_not_reuse_the_same_clips(db, tmp_cfg, tmp_path: 
     assert first.is_file() and second.is_file()
 
 
+def test_build_short_with_named_clips_uses_exactly_those(db, tmp_cfg, tmp_path: Path, monkeypatch) -> None:
+    _stub_ollama(monkeypatch, {
+        "theme": "Paw Posers",
+        "category": "Paw Posers", "title": "Paw Posers", "hook": "Watch this",
+        "captions": ["one", "two", "three"],
+    })
+    ids = [
+        _insert_clip(_make_video(tmp_path / f"clip{index}.mp4", duration=6), f"v{index}", first_ts=1.0)
+        for index in range(5)
+    ]
+
+    used: set[int] = set()
+    out = build_short(tmp_cfg, used=used, clip_ids=[ids[3], ids[0], ids[4]])
+
+    assert out.is_file()
+    assert used == {ids[0], ids[3], ids[4]}  # the other two stay out, theme picking skipped
+
+
+def test_build_short_rejects_a_clip_id_that_is_not_in_the_pool(db, tmp_cfg, tmp_path: Path) -> None:
+    video_id = _insert_clip(_make_video(tmp_path / "one.mp4", duration=6), "v0", first_ts=1.0)
+
+    with pytest.raises(CompileError, match=r"not processed clips.*\[999\]"):
+        build_short(tmp_cfg, clip_ids=[video_id, 999])
+
+
 def test_build_short_refuses_when_there_is_not_enough_material(db, tmp_cfg, tmp_path: Path) -> None:
     _insert_clip(_make_video(tmp_path / "only.mp4", duration=6), "v0")
 

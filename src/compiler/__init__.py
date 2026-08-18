@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import shutil
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -12,8 +13,8 @@ from sqlalchemy import func, select
 
 from src.compiler import render
 from src.compiler.plan import (
-    Clip, Plan, PlanError, describe_frames, group_clips, has_text, make_plan, pick_sound,
-    rate_clip, tag_clip, tag_prop, unload,
+    Clip, Plan, PlanError, describe_frames, group_clips, has_text, make_plan, name_theme,
+    pick_sound, rate_clip, tag_clip, tag_prop, unload,
 )
 from src.storage.db import session_scope
 from src.storage.models import Detection, Video, VideoStatus
@@ -104,16 +105,30 @@ def build_short(
     keep_work: bool = False,
     used: set[int] | None = None,
     themes: set[str] | None = None,
+    clip_ids: list[int] | None = None,
 ) -> Path:
     """Build one short from the most recent processed clips. Returns the output path.
 
     ``used`` and ``themes`` are read and extended in place, so a caller building several
     shorts in a row gets a different set of clips and a different theme in each of them.
+
+    ``clip_ids`` names the clips and their order instead, for rebuilding a short with one
+    of them swapped out: theme picking is what chose the other four, and re-running it
+    would just choose them again.
     """
     compiler_cfg = cfg.compiler
 
     with session_scope() as session:
         pool = _pick_clips(session, cfg, category)
+
+    if clip_ids:
+        by_id = {row[0]: row for row in pool}
+        unusable = [clip_id for clip_id in clip_ids if clip_id not in by_id]
+        if unusable:
+            raise CompileError(
+                f"not processed clips of >= {compiler_cfg.segment_seconds}s: {unusable}"
+            )
+        pool = [by_id[clip_id] for clip_id in clip_ids]
 
     fresh = [row for row in pool if row[0] not in (used or set())]
     # a batch of nineteen shorts wants 95 of the 96 clips in the pool, so the last few are
@@ -121,7 +136,9 @@ def build_short(
     # While the unused clips are a third of the pool they are what a short is built from;
     # below that the whole pool comes back, and the same clip in two compilations under
     # two different themes beats a run of "TOP 5 FUNNY ANIMALS"
-    if len(fresh) >= len(pool) * 0.3:
+    if clip_ids:
+        pass  # the caller picked these five; "unused" has no say over them
+    elif len(fresh) >= len(pool) * 0.3:
         pool = fresh
     else:
         logger.info(f"only {len(fresh)} of {len(pool)} clips unused; drawing from all of them")
@@ -147,7 +164,14 @@ def build_short(
             logger.info(f"{len(seen) - len(keep)} clips carry their own captions, skipping them")
             pool = [pool[index] for index in keep]
             seen = [seen[index] for index in keep]
-        chosen, theme = group_clips(seen, compiler_cfg.clips_per_short, compiler_cfg, themes)
+        if clip_ids:
+            # the heading still has to be true of all five, so it comes from the tag the
+            # most of them share -- the same string group_clips would have grouped them on
+            tag, _ = Counter(clip.tag for clip in seen if clip.tag).most_common(1)[0]
+            chosen = list(range(len(seen)))
+            theme = name_theme(tag, seen, len(seen), compiler_cfg, done=themes)
+        else:
+            chosen, theme = group_clips(seen, compiler_cfg.clips_per_short, compiler_cfg, themes)
         picked = [pool[index] for index in chosen]
         clips = [seen[index] for index in chosen]
         plan = make_plan(clips, compiler_cfg, theme)

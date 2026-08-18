@@ -102,6 +102,9 @@ def process(
 def compile_short(
     category: str = typer.Option("", help="Only use clips of this category (dog, cat, ...)"),
     count: int = typer.Option(1, help="How many shorts to build, each from different clips"),
+    clips: str = typer.Option(
+        "", help="Build one short from these video ids, in this order: 397,201,123,64,488"
+    ),
     keep_work: bool = typer.Option(False, "--keep-work", help="Keep the intermediate segments"),
 ) -> None:
     """Assemble processed clips into a 1080x1920 short, captioned by the local model."""
@@ -111,9 +114,10 @@ def compile_short(
     # what earlier runs spent, or a second `compile` remakes the first one's shorts
     used, themes = recall(cfg)
     try:
-        for index in range(count):
+        clip_ids = [int(part) for part in clips.split(",") if part.strip()] if clips else None
+        for index in range(1 if clip_ids else count):
             try:
-                out = build_short(cfg, category or None, keep_work, used, themes)
+                out = build_short(cfg, category or None, keep_work, used, themes, clip_ids)
             except (CompileError, PlanError) as exc:
                 console.print(f"[red]{exc}[/red]")
                 # a later short running out of unused clips is a stop, not a failure
