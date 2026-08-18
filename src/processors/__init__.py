@@ -40,6 +40,7 @@ def run_processing(cfg: "Config", detect_animals: bool, check_quality: bool) -> 
                 _process_one(session, row, cfg, detector=detector, check_quality=check_quality)
             except Exception:
                 logger.exception(f"processing failed for video id={row.id} path={row.file_path}")
+                session.rollback()
                 errors += 1
                 continue
 
@@ -47,6 +48,12 @@ def run_processing(cfg: "Config", detect_animals: bool, check_quality: bool) -> 
                 processed += 1
             elif row.status == VideoStatus.REJECTED:
                 reasons[row.reject_reason or "unknown"] += 1
+
+            # one commit per video, not one for the whole run: `_process_one` moves the file
+            # into its species folder, and that move is not part of the transaction. A run
+            # killed halfway left 35 rows saying "downloaded, in unsorted/" while the file
+            # already sat in cat/ -- ffprobe then failed on every retry, forever.
+            session.commit()
 
     result: dict[str, int] = {"processed": processed, "rejected": sum(reasons.values()), "errors": errors}
     result.update({f"rejected_{reason}": count for reason, count in reasons.items()})

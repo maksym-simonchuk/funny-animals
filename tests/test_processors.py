@@ -378,6 +378,33 @@ def test_run_processing_rejects_a_watermark_that_only_shows_up_late(
     assert read  # the gate read the frame the mark is on, not only the middle one
 
 
+def test_run_processing_keeps_the_videos_it_finished_when_the_run_is_killed(
+    db, tmp_cfg, tmp_path: Path, monkeypatch
+) -> None:
+    """A killed run used to roll the whole loop back -- but the file moves it had already
+    made are not in the transaction. 35 rows ended up saying "downloaded, in unsorted/"
+    while the file sat in cat/, and every retry died in ffprobe."""
+    first = _make_video(tmp_path / "first.mp4", duration=2)  # too short: rejected, no transcode
+    second = _make_video(tmp_path / "second.mp4", duration=2)
+    row = _insert_video(db, first, source_id="first")
+    _insert_video(db, second, source_id="second")
+    real = processors._process_one
+    seen: list[int] = []
+
+    def killed_on_the_second(session, video_row, cfg, **kwargs):
+        seen.append(video_row.id)
+        if len(seen) > 1:
+            raise KeyboardInterrupt  # what a ^C or a job kill looks like from inside the loop
+        real(session, video_row, cfg, **kwargs)
+
+    monkeypatch.setattr(processors, "_process_one", killed_on_the_second)
+
+    with pytest.raises(KeyboardInterrupt):
+        run_processing(tmp_cfg, detect_animals=False, check_quality=False)
+
+    assert _get_video(row.id).status == VideoStatus.REJECTED
+
+
 def test_run_processing_quality_rejects_low_resolution(db, tmp_cfg, tmp_path: Path) -> None:
     src = tmp_path / "lowres.mp4"
     _make_video(src, duration=6, width=640, height=360)  # below default min_resolution=720
