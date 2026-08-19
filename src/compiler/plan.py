@@ -865,7 +865,7 @@ def group_clips(clips: list[Clip], size: int, cfg: "CompilerCfg",
         # watching, so the rating picks all five
         logger.info(f"nothing has {size} clips left to share; taking the best-rated clips")
         best = sorted(range(len(clips)), key=lambda index: -clips[index].score)
-        return best[:size], "Funny Animals"
+        return best[:size], _unused("Funny Animals", done)
 
     logger.info(f"theme: {tag} -- clips {[index + 1 for index in picked]}")
     done.add(tag)
@@ -1009,13 +1009,25 @@ def name_theme(tag: str, clips: list[Clip], size: int, cfg: "CompilerCfg",
             {"role": "assistant", "content": theme},
             {"role": "user", "content": f"{complaint} Another one."},
         ]
-    heading = fallback or _HEADINGS.get(tag, tag.title())
-    # the model gave up on a label this batch already used: "TOP 5 MORE NOSY NEIGHBOURS"
-    # is what a second edition is, and it is not the first one's heading twice
-    if heading.lower() in taken:
-        heading = f"More {heading}"
-    taken.add(heading.lower())
-    return heading
+    # the model gave up on a label this batch already used, so the fallback is the one
+    # that has to say it is a second edition rather than repeat the first's heading
+    return _unused(fallback or _HEADINGS.get(tag, tag.title()), taken)
+
+
+def _unused(heading: str, taken: set[str]) -> str:
+    """`heading`, turned into one no other short in the batch is already called.
+
+    "TOP 5 MORE NOSY NEIGHBOURS" is what a second edition of a theme is. A third has no
+    phrase for it that is not "More More", so from there the edition is numbered -- the
+    generic heading is the last resort of a batch that has run out of themes, and it is
+    reached often enough in a long run for two names not to be enough.
+    """
+    candidate, edition = heading, 2
+    while candidate.lower() in taken:
+        candidate = f"More {heading}" if edition == 2 else f"{heading} {edition}"
+        edition += 1
+    taken.add(candidate.lower())
+    return candidate
 
 
 def _stem(word: str) -> str:

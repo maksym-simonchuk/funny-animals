@@ -371,6 +371,20 @@ def test_group_clips_stays_generic_when_no_tag_can_fill_a_short(tmp_cfg) -> None
     assert plan_mod.group_clips(clips, 3, tmp_cfg.compiler) == ([0, 1, 2], "Funny Animals")
 
 
+def test_group_clips_numbers_the_generic_heading_it_already_used(tmp_cfg) -> None:
+    clips = [
+        plan_mod.Clip(1, "dog", [], tag="sleeping"),
+        plan_mod.Clip(2, "cat", [], tag="eating"),
+        plan_mod.Clip(3, "cat", [], tag="other"),
+    ]
+    themes: set[str] = set()
+
+    # three shorts off the same last resort are three editions, not one name three times
+    headings = [plan_mod.group_clips(clips, 3, tmp_cfg.compiler, themes)[1] for _ in range(3)]
+
+    assert headings == ["Funny Animals", "More Funny Animals", "Funny Animals 3"]
+
+
 def test_tag_clip_answers_only_from_the_list(monkeypatch, tmp_cfg) -> None:
     sent = _stub_ollama(monkeypatch, {"tag": "stealing food"})
 
