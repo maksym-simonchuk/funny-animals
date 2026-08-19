@@ -13,8 +13,9 @@ const SCROLL_DEFAULTS = {
   maxDuration: 60,
   animalTags:
     "animal, animals, pet, pets, dog, puppy, cat, kitten, kitty, hamster, " +
-    "parrot, horse, goat, duck, panda, fox, raccoon, животн, кот, кошка, " +
-    "котик, собак, пес, щенок, попугай, хомяк, енот, питом",
+    "parrot, horse, goat, duck, panda, fox, raccoon, lama, llama, alpaca, " +
+    "pig, piglet, животн, кот, кошка, котик, собак, пес, щенок, попугай, " +
+    "хомяк, енот, питом, лама, свинь, свинк, порос",
   funnyTags:
     "funny, fun, lol, humor, comedy, cute, fail, смешн, юмор, прикол, мил",
 };

@@ -44,6 +44,8 @@ _PERMANENT_MARKERS = (
     "login required",
     "sign in",
     "404",
+    # a photo post: the grid tile looks the same as a video's, so these do reach us
+    "no video in this post",
 )
 
 _DEFAULTS = {"delay_min": 3.0, "delay_max": 5.0, "retries": 3}

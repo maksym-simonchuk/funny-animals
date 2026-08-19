@@ -58,10 +58,16 @@ function matches(matcher, text, tags) {
   return tags.some((tag) => matcher.tag.test(tag)) || matcher.text.test(text);
 }
 
-// A hashtag page is itself a tag: on /explore/search/?q=%23funnyanimals the grid
-// tiles carry no caption, but the page you opened already says what they are.
+// A hashtag page is itself a tag: its tiles carry no caption, but the page you opened
+// already says what they are. Sometimes it says it in the query (?q=%23funnyanimals),
+// sometimes only in the path -- /explore/tags/funnyanimals/ redirects to
+// /popular/funnyanimals/, where nothing is spelled with a # any more.
+const TAG_PATH = /\/(?:explore\/tags|popular)\/([^/?#]+)/;
+
 function pageText() {
-  return `${decodeURIComponent(location.href)} ${document.title}`;
+  const path = TAG_PATH.exec(location.pathname);
+  const tag = path ? `#${decodeURIComponent(path[1])} ` : "";
+  return `${tag}${decodeURIComponent(location.href)} ${document.title}`;
 }
 
 /** true — queue it, false — scroll past, null — nothing rendered yet, ask again. */
