@@ -8,7 +8,7 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from src.storage.db import session_scope
-from src.storage.files import frames_dir, remove_quietly
+from src.storage import files
 from src.storage.models import Video, VideoStatus
 
 if TYPE_CHECKING:
@@ -32,12 +32,11 @@ def collect_stats(by_category: bool = False, by_source: bool = False) -> dict[st
         return result
 
 
-def prune_rejected(cfg: "Config", sharpness_below: float = 0.0) -> int:
+def prune_rejected(cfg: "Config") -> int:
     """Delete video and frames for status=rejected videos, clear file_path. Returns count pruned.
 
-    A low_sharpness reject is kept unless it scores under `sharpness_below`: min_sharpness is a
-    config knob, and a clip sitting just under it comes back the moment that knob moves. Every
-    other gate answers yes or no, so those files are dead weight whatever the config says.
+    A run deletes what it rejects as it goes, so this is the sweep for rows rejected before
+    it did: nothing a later run produces waits for it.
     """
     with session_scope() as session:
         rows = (
@@ -49,12 +48,8 @@ def prune_rejected(cfg: "Config", sharpness_below: float = 0.0) -> int:
         )
         count = 0
         for video in rows:
-            if video.reject_reason == "low_sharpness" and (video.sharpness or 0.0) >= sharpness_below:
-                continue
             path = Path(video.file_path)
-            remove_quietly(path)
-            remove_quietly(frames_dir(cfg, video.id))
-            video.file_path = None
+            files.drop(cfg, video)
             count += 1
             logger.info(f"pruned video id={video.id} path={path}")
         return count

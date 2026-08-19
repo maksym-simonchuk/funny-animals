@@ -255,14 +255,10 @@ def browse(
 
 
 @app.command()
-def prune(
-    sharpness_below: float = typer.Option(
-        0.0, help="Also drop low_sharpness rejects scoring under this; the rest wait on min_sharpness"
-    ),
-) -> None:
-    """Delete on-disk files and frames for rejected videos."""
+def prune() -> None:
+    """Delete on-disk files and frames for videos rejected before runs started doing it."""
     cfg = _bootstrap()
-    count = prune_rejected(cfg, sharpness_below)
+    count = prune_rejected(cfg)
     console.print(f"pruned {count} file(s)")
 
 

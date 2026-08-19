@@ -41,7 +41,7 @@ def test_collect_stats_counts_by_status(tmp_cfg, db):
     assert stats["by_status"] == {"processed": 1, "rejected": 1}
 
 
-def test_prune_drops_rejects_but_keeps_borderline_sharpness(tmp_cfg, db):
+def test_prune_drops_every_reject(tmp_cfg, db):
     with session_scope() as session:
         kept = _add(tmp_cfg, session, "keep", VideoStatus.PROCESSED, None, 20.0)
         gone = _add(tmp_cfg, session, "compilation", VideoStatus.REJECTED, "compilation", 20.0)
@@ -52,16 +52,16 @@ def test_prune_drops_rejects_but_keeps_borderline_sharpness(tmp_cfg, db):
         paths = {n: Path(v.file_path) for n, v in
                  (("keep", kept), ("gone", gone), ("blurry", blurry), ("borderline", borderline))}
 
-    assert prune_rejected(tmp_cfg, sharpness_below=12.0) == 2
+    assert prune_rejected(tmp_cfg) == 3
 
     assert paths["keep"].exists()
-    assert paths["borderline"].exists()
     assert not paths["gone"].exists()
     assert not paths["blurry"].exists()
+    assert not paths["borderline"].exists()
     assert not frames_dir(tmp_cfg, ids["gone"]).exists()
-    assert frames_dir(tmp_cfg, ids["borderline"]).exists()
+    assert not frames_dir(tmp_cfg, ids["borderline"]).exists()
 
     with session_scope() as session:
         cleared = {v.source_id: v.file_path for v in session.query(Video).all()}
     assert cleared["compilation"] is None and cleared["blurry"] is None
-    assert cleared["borderline"] is not None and cleared["keep"] is not None
+    assert cleared["borderline"] is None and cleared["keep"] is not None

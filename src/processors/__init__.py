@@ -48,6 +48,9 @@ def run_processing(cfg: "Config", detect_animals: bool, check_quality: bool) -> 
                 processed += 1
             elif row.status == VideoStatus.REJECTED:
                 reasons[row.reject_reason or "unknown"] += 1
+                # a reject is not coming back, and the run that rejected it is the one
+                # holding the disk: no reason to leave the file for a later `prune`
+                files.drop(cfg, row)
 
             # one commit per video, not one for the whole run: `_process_one` moves the file
             # into its species folder, and that move is not part of the transaction. A run
@@ -128,6 +131,7 @@ def _process_one(
             dup.status = VideoStatus.REJECTED
             dup.reject_reason = "duplicate"
             dup.sha256 = None
+            files.drop(cfg, dup)
             row.sha256 = sha256
             row.phash = phash
         else:

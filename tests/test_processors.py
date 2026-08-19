@@ -522,7 +522,7 @@ def test_run_processing_detects_animal_and_moves_file(
         assert detections[0].class_name == "cat"
 
 
-def test_run_processing_no_animal_rejects_without_moving_file(
+def test_run_processing_no_animal_rejects_and_takes_the_file_with_it(
     db, tmp_cfg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr("src.processors.AnimalDetector", _FakeDetector)
@@ -537,7 +537,9 @@ def test_run_processing_no_animal_rejects_without_moving_file(
     assert result == {"processed": 0, "rejected": 1, "errors": 0, "rejected_no_animal": 1}
     updated = _get_video(row.id)
     assert updated.reject_reason == "no_animal"
-    assert src.exists()
+    # nothing rejected is coming back, so the run deletes it instead of leaving it for `prune`
+    assert not src.exists()
+    assert updated.file_path is None
 
 
 def test_run_processing_instantiates_detector_once_across_many_videos(

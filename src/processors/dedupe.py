@@ -11,6 +11,7 @@ from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from src.storage import files
 from src.storage.db import session_scope
 from src.storage.models import Video, VideoStatus
 
@@ -136,11 +137,13 @@ def run_dedupe(cfg: "Config", method: str) -> dict[str, int]:
                 logger.info(f"duplicate: video {match.id} rejected in favor of {candidate.id}")
                 match.status = VideoStatus.REJECTED
                 match.reject_reason = "duplicate"
+                files.drop(cfg, match)
                 kept.remove(match)
                 kept.append(candidate)
             else:
                 logger.info(f"duplicate: video {candidate.id} rejected in favor of {match.id}")
                 candidate.status = VideoStatus.REJECTED
                 candidate.reject_reason = "duplicate"
+                files.drop(cfg, candidate)
 
     return {"checked": checked, "duplicates": duplicates}

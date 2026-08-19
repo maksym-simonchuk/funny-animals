@@ -49,7 +49,7 @@ python app.py compile --category dog                                # собра
 python app.py export --format coco --output dataset/
 python app.py stats --show-categories --show-sources
 python app.py serve --host 0.0.0.0 --port 8000                      # FastAPI на :8000
-python app.py prune                                                 # стереть файлы записей status=rejected
+python app.py prune                                                 # подмести файлы старых rejected (новые стираются сразу)
 ```
 
 ## 5. Формат `urls.txt`

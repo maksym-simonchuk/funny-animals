@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from src.config import Config
+    from src.storage.models import Video
 
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
 
@@ -76,6 +77,14 @@ def remove_quietly(path: str | Path | None) -> bool:
         target.unlink()
         return True
     return False
+
+
+def drop(cfg: "Config", video: "Video") -> None:
+    """Everything on disk for one video -- the file and its frames -- and the row stops
+    pointing at what is not there any more."""
+    remove_quietly(video.file_path)
+    remove_quietly(frames_dir(cfg, video.id))
+    video.file_path = None
 
 
 def is_within(child: Path, parent: Path) -> bool:
