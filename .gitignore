@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 .env
+browser_extension/session.json
 data/
 dataset/
 *.db

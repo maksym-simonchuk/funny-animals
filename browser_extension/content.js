@@ -19,6 +19,10 @@ const HASHTAG_RE = /#[\p{L}\p{N}_]+/gu;
 
 let settings = { ...SCROLL_DEFAULTS };
 let matchers = { animals: null, funny: null };
+// Set by `app.py browse`, which opens a window nobody is watching: the tab-visibility
+// stops below are there so a run never moves a tab you are reading, and in that window
+// there is no such tab. Off in an ordinary profile, where they still apply.
+let unattended = false;
 
 const decided = new Set(); // shortcodes already judged, so each post is judged once
 const counts = { matched: 0, skipped: 0 };
@@ -255,7 +259,7 @@ const scroller = {
     if (!this.running) return;
 
     // Never move a tab the user is not looking at.
-    if (document.hidden) return this.stop("stopped: tab hidden");
+    if (document.hidden && !unattended) return this.stop("stopped: tab hidden");
     if (this.steps >= settings.maxScrolls) return this.stop("stopped: reached max scrolls");
 
     // An open post is paged with the viewer's arrow; a feed or grid is scrolled.
@@ -325,19 +329,20 @@ const scroller = {
 };
 
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) scroller.stop("stopped: tab hidden");
+  if (document.hidden && !unattended) scroller.stop("stopped: tab hidden");
 });
 
 // --- wiring -----------------------------------------------------------------
 
 function applyState(state) {
   settings = { ...SCROLL_DEFAULTS, ...(state.scroll || {}) };
+  unattended = Boolean(state.unattended);
   matchers = { animals: compile(settings.animalTags), funny: compile(settings.funnyTags) };
   if (state.running) scroller.start();
   else scroller.stop("idle");
 }
 
-const STATE_KEYS = ["running", "scroll"];
+const STATE_KEYS = ["running", "scroll", "unattended"];
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
@@ -345,8 +350,12 @@ chrome.storage.onChanged.addListener((changes, area) => {
   chrome.storage.local.get(STATE_KEYS).then(applyState);
 });
 
-// A page load always stops the run: it only ever starts because you just started it.
-chrome.storage.local
-  .set({ running: false })
-  .then(() => chrome.storage.local.get(STATE_KEYS))
-  .then(applyState);
+// A page load always stops the run: it only ever starts because you just started it --
+// except in an unattended window, which is loaded already running and has no popup.
+chrome.storage.local.get(STATE_KEYS).then((state) => {
+  if (state.unattended) return applyState(state);
+  return chrome.storage.local
+    .set({ running: false })
+    .then(() => chrome.storage.local.get(STATE_KEYS))
+    .then(applyState);
+});

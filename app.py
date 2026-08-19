@@ -1,4 +1,4 @@
-"""Typer CLI: collect, fetch, process, dedupe, export, stats, serve, prune.
+"""Typer CLI: collect, browse, fetch, process, dedupe, export, stats, serve, prune.
 
 Every command follows the same wiring: load_config -> setup_logging -> init_db ->
 call one function from the relevant module. No business logic lives here.
@@ -31,6 +31,19 @@ def _bootstrap() -> Config:
     setup_logging(level=cfg.app.log_level, log_dir=cfg.storage.log_path)
     init_db(cfg.storage.database)
     return cfg
+
+
+def _require_browser_mode(cfg: Config) -> None:
+    """Both browser commands need the queue on and a token standing in front of it."""
+    if not cfg.browser_mode.enabled:
+        console.print("[red]browser_mode.enabled is false in config.yaml.[/red]")
+        raise typer.Exit(1)
+    if not cfg.browser_mode.ingest_token:
+        import secrets
+
+        console.print("[red]No ingest token.[/red] Add this line to .env and rerun:")
+        console.print(f"  BROWSER_INGEST_TOKEN={secrets.token_urlsafe(32)}")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -196,15 +209,7 @@ def browser_mode(
 ) -> None:
     """Run the server with the queue endpoint the browser extension posts into."""
     cfg = _bootstrap()
-    if not cfg.browser_mode.enabled:
-        console.print("[red]browser_mode.enabled is false in config.yaml.[/red]")
-        raise typer.Exit(1)
-    if not cfg.browser_mode.ingest_token:
-        import secrets
-
-        console.print("[red]No ingest token.[/red] Add this line to .env and rerun:")
-        console.print(f"  BROWSER_INGEST_TOKEN={secrets.token_urlsafe(32)}")
-        raise typer.Exit(1)
+    _require_browser_mode(cfg)
 
     import uvicorn
     from src.api import create_app
@@ -214,6 +219,39 @@ def browser_mode(
     console.print(f"Token:     {cfg.browser_mode.ingest_token}")
     console.print("Drain the queue elsewhere: app.py fetch --from-queue --watch")
     uvicorn.run(create_app(cfg), host=host, port=port)
+
+
+@app.command()
+def browse(
+    url: str = typer.Argument(
+        "https://www.instagram.com/explore/tags/funnyanimals/", help="Feed or hashtag page to walk"
+    ),
+    minutes: float = typer.Option(20.0, help="Close the browser after this long"),
+    login: bool = typer.Option(
+        False, help="Open a visible window and wait: sign in once, the profile keeps it"
+    ),
+    show: bool = typer.Option(False, help="Watch it work instead of running headless"),
+    server: str = typer.Option("http://127.0.0.1:8000", help="Where browser-mode is listening"),
+    chrome: str = typer.Option("", help="Path to Chrome for Testing or Chromium, if it is not in the usual place"),
+) -> None:
+    """Walk a feed in a Chrome of its own and queue what the extension matches."""
+    cfg = _bootstrap()
+    _require_browser_mode(cfg)
+    from src.collectors.browser import BrowserError, open_profile, run_session
+
+    try:
+        if login:
+            console.print("Sign in to Instagram, then close the window.")
+            open_profile(cfg, url, server=server, chrome=chrome)
+            return
+        queued = run_session(
+            cfg, url, server=server, minutes=minutes, headless=not show, chrome=chrome
+        )
+    except BrowserError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from None
+    console.print(f"queued {queued} new link(s)")
+    console.print("Download them: app.py fetch --from-queue")
 
 
 @app.command()

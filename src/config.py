@@ -98,6 +98,9 @@ class BrowserModeCfg:
     ingest_token_env: str | None = None
     max_queue_size: int = 1000
     poll_interval: float = 10.0
+    # Chrome profile `app.py browse` runs in: its own, so the Instagram session it
+    # holds is not the one your everyday browser is signed into.
+    profile_path: Path = Path("data/browser-profile")
 
 
 @dataclass(frozen=True)
@@ -195,6 +198,7 @@ def _parse_browser_mode(raw: dict[str, Any]) -> BrowserModeCfg:
         ingest_token=str(_expand(raw.get("ingest_token", "")) or ""),
         max_queue_size=int(raw.get("max_queue_size", defaults.max_queue_size)),
         poll_interval=float(raw.get("poll_interval", defaults.poll_interval)),
+        profile_path=Path(raw.get("profile_path", defaults.profile_path)),
     )
 
 

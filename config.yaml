@@ -29,6 +29,9 @@ browser_mode:
   ingest_token: "${BROWSER_INGEST_TOKEN}"
   max_queue_size: 1000
   poll_interval: 10
+  # Chrome profile `app.py browse` launches: log into Instagram there once with
+  # `app.py browse --login` and every later run rides on the cookies it kept.
+  profile_path: data/browser-profile
 
 processing:
   video:

@@ -15,6 +15,29 @@ let pending = [];
 let flushTimer = null;
 let sessionCount = 0;
 
+/* An unattended window has nobody to open the popup in it, so `app.py browse` leaves
+ * the settings in a file next to this one: an extension cannot be handed anything
+ * from outside, but it can read its own folder. No file — nothing changes, and the
+ * popup stays the only way in.
+ */
+async function loadSession() {
+  let session;
+  try {
+    const response = await fetch(chrome.runtime.getURL("session.json"));
+    session = await response.json();
+  } catch (error) {
+    return; // an ordinary profile: wait to be started by hand
+  }
+  const autostart = Boolean(session.autostart);
+  await chrome.storage.local.set({
+    serverUrl: session.serverUrl || DEFAULTS.serverUrl,
+    token: session.token || "",
+    // what tells the content script that a hidden tab is not a reason to stop
+    unattended: autostart,
+    running: autostart,
+  });
+}
+
 async function loadPending() {
   const stored = await chrome.storage.local.get("pending");
   pending = stored.pending || [];
@@ -99,3 +122,4 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 loadPending();
+loadSession();
